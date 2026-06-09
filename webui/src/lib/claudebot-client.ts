@@ -346,11 +346,16 @@ export class ClaudebotClient {
       }
       case "message.appended": {
         this.emitSessionUpdate(msg.sessionId, "thread");
+        // The user message is added optimistically in the client's send()
+        // path, and echoed back here by the server. Don't dispatch the
+        // echo as a streaming event — the hook would re-render it as an
+        // assistant bubble.
+        if (msg.message.role === "user") return;
         const inbound: InboundEvent = {
           event: "message",
           chat_id: msg.sessionId,
           text: msg.message.content,
-          kind: msg.message.role === "user" ? undefined : "progress",
+          kind: "progress",
         };
         this.dispatch(msg.sessionId, inbound);
         return;
