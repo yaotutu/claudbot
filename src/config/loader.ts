@@ -19,10 +19,16 @@ export function resolveRuntimeConfig(input: RuntimeConfigInput, env: ResolveEnv 
   const rawHome = parsed.home || env.homeEnv || defaultHome();
   const home = expandPath(rawHome);
   const workspacePath = expandPath(parsed.workspace.path || join(home, "workspace"));
+  // Env vars override parsed config (handy for `CLAUDEBOT_HOST=0.0.0.0 bun run ...`).
+  const envHost = process.env.CLAUDEBOT_HOST;
+  const envPort = process.env.CLAUDEBOT_PORT;
+  const host = envHost && envHost.length > 0 ? envHost : parsed.gateway.host;
+  const port = envPort && envPort.length > 0 ? Number(envPort) : parsed.gateway.port;
   return {
     ...parsed,
     home,
     workspace: { path: workspacePath },
+    gateway: { host, port },
   };
 }
 

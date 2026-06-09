@@ -6,7 +6,7 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const ToolPolicySchema = z.enum(["allow", "deny", "confirm"]);
 
 const GatewaySchema = z.object({
-  host: z.string().default("127.0.0.1"),
+  host: z.string().default("0.0.0.0"),
   port: z.number().int().min(1).max(65535).default(18790),
 });
 
@@ -30,7 +30,7 @@ const ToolsSchema = z.object({
 export const RuntimeConfigSchema = z.object({
   home: z.string().optional(),
   workspace: z.object({ path: z.string().optional() }).default({ path: undefined }),
-  gateway: GatewaySchema.default({ host: "127.0.0.1", port: 18790 }),
+  gateway: GatewaySchema.default({ host: "0.0.0.0", port: 18790 }),
   claudeCode: ClaudeCodeSchema.default({
     baseUrl: "",
     apiKey: "",
