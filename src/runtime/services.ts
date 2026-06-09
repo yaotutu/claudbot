@@ -101,7 +101,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   };
   const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sessionStore);
   const realScheduler = new SchedulerService(schedulerStore, async (sched, run) => {
-    return runScheduledTurn(sched, run, sessions, paths, queryFactory);
+    return runScheduledTurn(sched, run, config, toolRegistry, paths, queryFactory);
   });
   // Re-point the registry's scheduler reference to the real one.
   (toolRegistry as unknown as { scheduler: SchedulerService }).scheduler = realScheduler;
@@ -160,26 +160,44 @@ function buildToolRegistry(
 async function runScheduledTurn(
   sched: { id: string; message: string; timezone: string },
   run: { id: string; startedAt: string },
-  sessions: SessionStore,
+  config: RuntimeConfig,
+  toolRegistry: ToolRegistry,
   paths: RuntimePaths,
-  _qf: QueryFactory,
+  queryFactory: QueryFactory,
 ): Promise<string> {
-  // For MVP, the schedule executor is a stub: the schedule "completes" by
-  // recording its own message as the result. A real implementation would
-  // dispatch a one-off ClaudeRunner.run() against the same queryFactory
-  // and stream the final result back to the scheduler.
+  // Dispatch a real turn against the last-active session. The runner
+  // streams via the same queryFactory used for user turns; the SDK
+  // session store adapter folds the result into the session's .jsonl
+  // automatically (the runner passes `resumeSessionId: target`).
   const state = await readRuntimeStateOrEmpty(paths.runtimeStateFile);
   const target = state.lastActiveSessionId;
-  if (!target) return `[schedule ${sched.id}] skipped: no active session`;
-  const session = await sessions.get(target);
-  if (!session) return `[schedule ${sched.id}] skipped: session ${target} not found`;
-  const result = `[schedule ${sched.id}] ${sched.message}`;
-  await sessions.appendMessage(session.id, {
-    role: "system",
-    content: result,
-    metadata: { kind: "schedule_delivery", scheduleId: sched.id, runId: run.id },
-  });
-  return result;
+  if (!target) {
+    return `[schedule ${sched.id}] skipped: no active session`;
+  }
+  const prompt = `[schedule ${sched.id}] ${sched.message}`;
+  const runner = new ClaudeRunner(
+    {
+      config,
+      registry: toolRegistry,
+      promptInputs: {
+        source: "schedule_turn",
+        home: paths.home,
+        workspacePath: paths.workspace,
+        timezone: sched.timezone,
+        sessionId: target,
+        scheduleRunId: run.id,
+        userFile: paths.userFile,
+        soulFile: paths.soulFile,
+      },
+    },
+    queryFactory,
+  );
+  let result = "";
+  for await (const ev of runner.run({ prompt, resumeSessionId: target })) {
+    if (ev.type === "text_delta") result += ev.text;
+    if (ev.type === "turn_done") result = ev.result || result;
+  }
+  return result || `[schedule ${sched.id}] (no output)`;
 }
 
 async function readRuntimeStateOrEmpty(path: string): Promise<{ lastActiveSessionId: string }> {
