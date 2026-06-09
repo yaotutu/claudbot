@@ -4,6 +4,7 @@ import type { RuntimeConfig } from "../config/schema.ts";
 import { loadConfig, type LoadedConfig } from "../config/loader.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
 import { SessionStore } from "../sessions/store.ts";
+import { createClaudebotSessionStore } from "../sessions/adapter.ts";
 import { RuntimeStateStore } from "./state.ts";
 import { AgentProfileStore } from "../agent/profile.ts";
 import { MemoryStore } from "../memory/store.ts";
@@ -73,9 +74,10 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     memory,
     profile,
   });
-  const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config);
+  const sessionStore = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+  const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sessionStore);
   const realScheduler = new SchedulerService(schedulerStore, async (sched, run) => {
-    return runScheduledTurn(sched, run, config, paths, queryFactory);
+    return runScheduledTurn(sched, run, sessions, paths, queryFactory);
   });
   // Re-point the registry's scheduler reference to the real one.
   (toolRegistry as unknown as { scheduler: SchedulerService }).scheduler = realScheduler;
@@ -133,7 +135,7 @@ function buildToolRegistry(
 async function runScheduledTurn(
   sched: { id: string; message: string; timezone: string },
   run: { id: string; startedAt: string },
-  _config: RuntimeConfig,
+  sessions: SessionStore,
   paths: RuntimePaths,
   _qf: QueryFactory,
 ): Promise<string> {
@@ -142,9 +144,10 @@ async function runScheduledTurn(
   // dispatch a one-off ClaudeRunner.run() against the same queryFactory
   // and stream the final result back to the scheduler.
   const state = await readRuntimeStateOrEmpty(paths.runtimeStateFile);
-  const target = state.lastActiveSessionId || "inbox";
-  const sessions = new SessionStore(paths.sessionsDir);
-  const session = (await sessions.get(target)) || (await sessions.getOrCreateInbox());
+  const target = state.lastActiveSessionId;
+  if (!target) return `[schedule ${sched.id}] skipped: no active session`;
+  const session = await sessions.get(target);
+  if (!session) return `[schedule ${sched.id}] skipped: session ${target} not found`;
   const result = `[schedule ${sched.id}] ${sched.message}`;
   await sessions.appendMessage(session.id, {
     role: "system",

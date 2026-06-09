@@ -7,6 +7,7 @@ import type { ToolRegistry } from "../tools/registry.ts";
 import { buildSystemPrompt, type PromptInputs } from "./prompt.ts";
 import type { AssistantContent, NormalizedEvent, SdkMessage, UserContent } from "./events.ts";
 import type { RuntimeConfig } from "../config/schema.ts";
+import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
 
 export type ClaudeRunnerDeps = {
   config: RuntimeConfig;
@@ -88,6 +89,7 @@ export function makeRealQueryFactory(
   registry: ToolRegistry,
   config: RuntimeConfig,
   sdkConfigDir: string,
+  sessionStore: SessionStore,
 ): QueryFactory {
   return async function* ({ prompt, resumeSessionId, systemPrompt, toolContext }) {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
@@ -125,6 +127,7 @@ export function makeRealQueryFactory(
         env,
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         mcpServers: { claudebot: mcpServer },
+        sessionStore,
       },
     });
     for await (const msg of stream) yield msg;
