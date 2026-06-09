@@ -117,3 +117,8 @@ Two non-obvious things in the boot path (`webui/src/App.tsx`):
 - **The webui `README.md` is stale.** It describes a Python/pip packaging flow that no longer applies (claudebot is Bun/TypeScript, not Python). The "just want to use the WebUI?" section is misleading. The accurate boot steps are the ones in this file's Commands section.
 - **`src/spikes/`** — diagnostic scripts from the SDK spike phase. Not part of the runtime; safe to delete if you need a cleanup.
 - **Live Claude SDK verification is blocked** in this environment (no working Anthropic auth for some endpoints). Mocked tests cover the runner, gateway, and stream hook paths. The `maybeChunk` chunker exists specifically to make the BigModel/glm-5.1 endpoint feel streaming; verify any change to it against a live call before shipping.
+
+# 以下规则为用户手动添加，禁止AI修改：
+- 优先使用函数式编程范式，避免使用类和面向对象的设计。
+- 当前项目与 https://github.com/HKUDS/nanobot 这个项目的用户群体高度相似，遇见不确定的设计决策时，优先参考 nanobot 的实现。
+- 当前项目与 https://github.com/openclaw/openclaw 这个项目的用户群体高度相似，遇见不确定的设计决策时，优先参考 openclaw 的实现。
