@@ -1,0 +1,25 @@
+{
+  "type": "assistant",
+  "message": {
+    "id": "msg_202606091120368962e792274a401e",
+    "type": "message",
+    "role": "assistant",
+    "model": "glm-5.1",
+    "content": [
+      {
+        "type": "text",
+        "text": "The `claudebot_echo` tool returned `echo:ok`. It simply echoed back the text \"ok\" that was sent to it, prefixed with `echo:`. The tool works as expected — it echoes whatever text you provide."
+      }
+    ],
+    "stop_reason": null,
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    "context_management": null
+  },
+  "parent_tool_use_id": null,
+  "session_id": "<uuid>",
+  "uuid": "<uuid>"
+}

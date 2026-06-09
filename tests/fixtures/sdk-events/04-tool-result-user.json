@@ -1,0 +1,28 @@
+{
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "tool_use_id": "call_b233676799cd4ec2b6239bba",
+        "type": "tool_result",
+        "content": [
+          {
+            "type": "text",
+            "text": "echo:ok"
+          }
+        ]
+      }
+    ]
+  },
+  "parent_tool_use_id": null,
+  "session_id": "<uuid>",
+  "uuid": "<uuid>",
+  "timestamp": "2026-06-09T03:20:37.094Z",
+  "tool_use_result": [
+    {
+      "type": "text",
+      "text": "echo:ok"
+    }
+  ]
+}
