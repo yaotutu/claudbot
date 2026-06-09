@@ -87,6 +87,7 @@ export class ClaudeRunner {
 export function makeRealQueryFactory(
   registry: ToolRegistry,
   config: RuntimeConfig,
+  sdkConfigDir: string,
 ): QueryFactory {
   return async function* ({ prompt, resumeSessionId, systemPrompt, toolContext }) {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
@@ -100,8 +101,12 @@ export function makeRealQueryFactory(
     // Claude Code CLI checks the AUTH_TOKEN variant when the base URL is
     // a non-Anthropic host (proxy / OpenAI-compat / BigModel etc.) and
     // 401s otherwise — even though the proxy itself would accept either.
+    // CLAUDE_CONFIG_DIR pins the SDK subprocess to a claudebot-owned
+    // config directory so its session storage lives under our home
+    // directory rather than the user's default ~/.claude.
     const env: Record<string, string | undefined> = {
       ...process.env,
+      CLAUDE_CONFIG_DIR: sdkConfigDir,
       ...(config.claudeCode.baseUrl ? { ANTHROPIC_BASE_URL: config.claudeCode.baseUrl } : {}),
       ...(config.claudeCode.apiKey
         ? {
