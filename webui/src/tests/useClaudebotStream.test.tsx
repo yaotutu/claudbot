@@ -1361,11 +1361,15 @@ describe("useClaudebotStream", () => {
       result.current.send("fine");
     });
 
-    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages).toHaveLength(2);
     expect(result.current.messages[0].role).toBe("user");
     expect(result.current.messages[0].content).toBe("fine");
     expect(result.current.messages[0].turnId).toEqual(expect.any(String));
     expect(result.current.messages[0].turnPhase).toBe("user");
+    // A streaming assistant placeholder is appended so the UI shows
+    // activity (typing dots) immediately, before the first delta arrives.
+    expect(result.current.messages[1].role).toBe("assistant");
+    expect(result.current.messages[1].isStreaming).toBe(true);
   });
 
   it("attaches assistant media_urls to complete messages", () => {
@@ -1497,7 +1501,9 @@ describe("useClaudebotStream", () => {
     act(() => {
       result.current.send("long task");
     });
-    expect(result.current.messages).toHaveLength(1);
+    // send() now appends both a user message and a streaming assistant
+    // placeholder so the UI shows activity immediately.
+    expect(result.current.messages).toHaveLength(2);
     expect(result.current.isStreaming).toBe(true);
 
     act(() => {
@@ -1506,7 +1512,7 @@ describe("useClaudebotStream", () => {
 
     expect(fake.client.sendMessage).toHaveBeenLastCalledWith("chat-stop", "/stop");
     expect(result.current.isStreaming).toBe(false);
-    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages).toHaveLength(2);
     expect(result.current.messages[0].content).toBe("long task");
   });
 

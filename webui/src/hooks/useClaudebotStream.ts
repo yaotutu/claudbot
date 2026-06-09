@@ -1041,6 +1041,7 @@ export function useClaudebotStream(
 
       flushPendingStreamEvents();
       const turnId = crypto.randomUUID();
+      const assistantId = crypto.randomUUID();
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
       setMessages((prev) => {
         buffer.current = null;
@@ -1061,8 +1062,26 @@ export function useClaudebotStream(
             ...(options?.cliApps?.length ? { cliApps: options.cliApps } : {}),
             ...(options?.mcpPresets?.length ? { mcpPresets: options.mcpPresets } : {}),
           },
+          // Placeholder assistant bubble so the thread shows activity
+          // immediately, during the (sometimes 5-10s) gap before the first
+          // agent delta arrives. The first text_delta replaces this
+          // content via the existing streaming path.
+          {
+            id: assistantId,
+            role: "assistant",
+            content: "",
+            turnId,
+            turnPhase: "answer",
+            turnSeq: 0,
+            createdAt: Date.now(),
+            isStreaming: true,
+          },
         ];
       });
+      // Pre-seed the streaming buffer with the placeholder id so the first
+      // delta is appended to the right message.
+      buffer.current = { messageId: assistantId };
+      activeAssistantRef.current = { id: assistantId, index: -1 };
       // Mark streaming immediately so the UI shows the loading indicator
       // right away, before the first delta arrives from the server.
       setIsStreaming(true);
