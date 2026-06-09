@@ -96,10 +96,19 @@ export function makeRealQueryFactory(
     // `apiKey` fields. We translate our config into the env vars the
     // subprocess reads, and spread `process.env` first so the subprocess
     // still has PATH, HOME, etc. Config wins over process.env when set.
+    // We set both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN because the
+    // Claude Code CLI checks the AUTH_TOKEN variant when the base URL is
+    // a non-Anthropic host (proxy / OpenAI-compat / BigModel etc.) and
+    // 401s otherwise — even though the proxy itself would accept either.
     const env: Record<string, string | undefined> = {
       ...process.env,
       ...(config.claudeCode.baseUrl ? { ANTHROPIC_BASE_URL: config.claudeCode.baseUrl } : {}),
-      ...(config.claudeCode.apiKey ? { ANTHROPIC_API_KEY: config.claudeCode.apiKey } : {}),
+      ...(config.claudeCode.apiKey
+        ? {
+            ANTHROPIC_API_KEY: config.claudeCode.apiKey,
+            ANTHROPIC_AUTH_TOKEN: config.claudeCode.apiKey,
+          }
+        : {}),
     };
     const stream = query({
       prompt,

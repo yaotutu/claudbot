@@ -226,6 +226,10 @@ describe("makeRealQueryFactory", () => {
     const env = opts.env as Record<string, string | undefined>;
     expect(env.ANTHROPIC_BASE_URL).toBe("http://192.168.55.222:20128");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-test-key");
+    // The Claude Code CLI checks ANTHROPIC_AUTH_TOKEN for non-Anthropic
+    // base URLs even though the proxy would accept either header. Mirror
+    // the key into AUTH_TOKEN so the CLI's own auth check passes.
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test-key");
     // process.env must be preserved (PATH, HOME, etc.) per SDK docs.
     expect(env.PATH).toBe(process.env.PATH);
   });
