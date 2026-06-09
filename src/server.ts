@@ -25,7 +25,7 @@ const server = Bun.serve({
   async fetch(req, srv) {
     const url = new URL(req.url);
     if (url.pathname === "/ws") {
-      const data: WsData = { sessionId: "inbox", services, send: () => {} };
+      const data: WsData = { sessionId: "", services, send: () => {} };
       const ok = (srv as unknown as { upgrade: (r: Request, o: { data: WsData }) => boolean }).upgrade(req, { data });
       if (ok) return undefined;
       return new Response("upgrade required", { status: 426 });
