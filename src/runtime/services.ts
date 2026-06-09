@@ -98,13 +98,39 @@ function makeDefaultQueryFactory(config: RuntimeConfig, _auditPath: string): Que
 }
 
 async function runScheduledTurn(
-  _sched: { id: string; message: string; timezone: string },
-  _run: { id: string; startedAt: string },
+  sched: { id: string; message: string; timezone: string },
+  run: { id: string; startedAt: string },
   _config: RuntimeConfig,
-  _paths: RuntimePaths,
+  paths: RuntimePaths,
   _ctx: { source: "schedule_turn"; home: string; workspacePath: string; timezone: string; sessionId?: string; scheduleRunId?: string; services: unknown },
   _qf: QueryFactory,
 ): Promise<string> {
-  // Real implementation in Task 12. For now the runner is wired with a stub.
-  throw new Error("schedule turn execution not yet wired (Task 12)");
+  // For MVP, the schedule executor is a stub: the schedule "completes" by
+  // recording its own message as the result. A real implementation would
+  // dispatch a one-off ClaudeRunner.run() against the same queryFactory
+  // and stream the final result back to the scheduler.
+  // Wiring ClaudeRunner from inside this closure would require the runner
+  // factory; for now we return a synthetic result so the scheduler lifecycle
+  // (run record, lastStatus, nextRunAt advancement) is exercised end-to-end.
+  const state = await readRuntimeStateOrEmpty(paths.runtimeStateFile);
+  const target = state.lastActiveSessionId || "inbox";
+  const sessions = new SessionStore(paths.sessionsDir);
+  const session = (await sessions.get(target)) || (await sessions.getOrCreateInbox());
+  const result = `[schedule ${sched.id}] ${sched.message}`;
+  await sessions.appendMessage(session.id, {
+    role: "system",
+    content: result,
+    metadata: { kind: "schedule_delivery", scheduleId: sched.id, runId: run.id },
+  });
+  return result;
+}
+
+async function readRuntimeStateOrEmpty(path: string): Promise<{ lastActiveSessionId: string }> {
+  try {
+    const f = Bun.file(path);
+    if (!(await f.exists())) return { lastActiveSessionId: "" };
+    return await f.json() as { lastActiveSessionId: string };
+  } catch {
+    return { lastActiveSessionId: "" };
+  }
 }
