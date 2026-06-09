@@ -23,3 +23,10 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
   await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`);
   await Bun.$`mv ${tmp} ${path}`.quiet();
 }
+
+export async function writeTextAtomic(path: string, content: string): Promise<void> {
+  await ensureDir(dirname(path));
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await Bun.write(tmp, content);
+  await Bun.$`mv ${tmp} ${path}`.quiet();
+}
