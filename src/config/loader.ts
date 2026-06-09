@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { RuntimeConfigSchema, type RuntimeConfig, type RuntimeConfigInput } from "./schema.ts";
 import { expandPath, readJson } from "../utils/fs.ts";
 
+export type { RuntimeConfig } from "./schema.ts";
+
 type ResolveEnv = {
   homeEnv?: string;
   configDir?: string;
