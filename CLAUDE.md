@@ -16,7 +16,8 @@ Server (Bun runtime, ESM, strict TS):
 
 ```bash
 bun install              # server deps
-bun run dev              # bun --watch src/server.ts
+bun run dev              # bun --watch src/server.ts (gateway only, on :18790)
+bun run dev:all          # gateway (:18790) + WebUI (:5173) concurrently
 bun run start            # production
 bun test                 # bun test, runs tests/*.test.ts
 bunx tsc --noEmit        # typecheck
@@ -41,7 +42,15 @@ Production flow: `cd webui && bun run build` then `bun run start` from root. `sr
 
 ## Configuration & env
 
-Config is Zod-validated (`src/config/schema.ts`), loaded from a JSON file passed via `CLAUDEBOT_CONFIG`, then resolved:
+Config is Zod-validated (`src/config/schema.ts`) and loaded in this order:
+
+1. `CLAUDEBOT_CONFIG` — explicit path to a JSON file. If set but the file is missing, a warning is logged and the runtime falls through.
+2. `$CLAUDEBOT_HOME/config.json` (default `~/.claudebot/config.json`) — auto-discovered. The common setup: edit this file, restart, done.
+3. Schema defaults — if neither is found, the runtime starts with built-in defaults and prints a warning to stderr.
+
+The startup banner shows which one was used (`config:` line).
+
+Env-var overrides for individual fields:
 
 - `CLAUDEBOT_HOME` → `home` (default `~/.claudebot`)
 - `CLAUDEBOT_HOST` → `gateway.host` (default `0.0.0.0` — LAN-friendly, no auth)

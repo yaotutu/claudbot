@@ -4,14 +4,13 @@ import { join } from "node:path";
 import { buildServices } from "./runtime/services.ts";
 import { handleHttp } from "./gateway/http.ts";
 import { makeWsHandlers, type WsData } from "./gateway/websocket.ts";
-import { resolveRuntimeConfig } from "./config/loader.ts";
+import { formatConfigSource, loadConfig } from "./config/loader.ts";
 import { runtimePaths } from "./config/paths.ts";
 
-const config = await resolveRuntimeConfig({
-  ...(await readOptionalConfig(process.env.CLAUDEBOT_CONFIG)),
-}, { homeEnv: process.env.CLAUDEBOT_HOME || "" });
+const loaded = await loadConfig();
+const config = loaded.config;
 const paths = runtimePaths(config);
-const services = await buildServices({ config, paths });
+const services = await buildServices({ loaded, paths });
 
 const handlers = makeWsHandlers(services);
 
@@ -48,14 +47,13 @@ const server = Bun.serve({
   },
 });
 
-console.log(`claudebot runtime listening on http://${config.gateway.host}:${config.gateway.port}`);
-
-async function readOptionalConfig(path: string | undefined): Promise<Record<string, unknown>> {
-  if (!path) return {};
-  try {
-    return await Bun.file(path).json();
-  } catch {
-    return {};
-  }
+// Startup banner — make it obvious where config came from and where things live.
+const url = `http://${config.gateway.host}:${config.gateway.port}`;
+console.log(`claudebot runtime listening on ${url}`);
+console.log(`  config:  ${formatConfigSource(loaded.source)}`);
+console.log(`  home:    ${config.home}`);
+console.log(`  model:   ${config.claudeCode.model}`);
+if (loaded.source.kind === "defaults") {
+  console.warn(`  ⚠️  No config file found. Set CLAUDEBOT_CONFIG or create ${config.home}/config.json to customize.`);
 }
 

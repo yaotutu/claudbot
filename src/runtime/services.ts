@@ -1,6 +1,7 @@
 // Service container: per-instance wiring of stores, registry, runner, gateway helpers.
 
 import type { RuntimeConfig } from "../config/schema.ts";
+import { loadConfig, type LoadedConfig } from "../config/loader.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
 import { SessionStore } from "../sessions/store.ts";
 import { RuntimeStateStore } from "./state.ts";
@@ -13,7 +14,6 @@ import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
 import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
-import { loadConfig } from "../config/loader.ts";
 
 export type ServiceContainer = {
   config: RuntimeConfig;
@@ -30,13 +30,21 @@ export type ServiceContainer = {
 };
 
 export type ServiceDeps = {
+  /** Pre-loaded config + source. Takes precedence over `config` if both are set. */
+  loaded?: LoadedConfig;
+  /** Legacy test-injection path: just hand-build a config. Source is recorded
+   *  as "defaults". Prefer `loaded` in new code. */
   config?: RuntimeConfig;
   queryFactory?: QueryFactory;
   paths?: RuntimePaths;
 };
 
 export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceContainer> {
-  const config = deps.config ?? await loadConfig();
+  const loaded: LoadedConfig = deps.loaded
+    ?? (deps.config
+        ? { config: deps.config, source: { kind: "defaults" } }
+        : await loadConfig());
+  const config = loaded.config;
   const paths = deps.paths ?? runtimePaths(config);
   const sessions = new SessionStore(paths.sessionsDir);
   const runtimeState = new RuntimeStateStore(paths.runtimeStateFile);
