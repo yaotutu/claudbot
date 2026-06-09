@@ -29,7 +29,7 @@ export async function fetchBootstrap(
     }
     const body = (await res.json()) as {
       config?: { claudeCode?: { model?: string } };
-      lastActiveSessionId?: string;
+      lastActiveSessionId?: string | null;
       sessions?: unknown[];
     };
     return {
@@ -38,6 +38,7 @@ export async function fetchBootstrap(
       ws_url: null,
       expires_in: 86_400,
       model_name: body.config?.claudeCode?.model ?? "glm-5.1",
+      lastActiveSessionId: body.lastActiveSessionId ?? null,
     };
   } finally {
     if (t) clearTimeout(t);

@@ -86,12 +86,15 @@ export async function listSessions(
     updatedAt?: string;
     messages?: Array<{ content?: string }>;
   };
-  const body = await request<{ sessions: Row[] }>(
+  // The gateway returns the list directly as a JSON array, NOT wrapped in
+  // `{ sessions: [...] }`. The unwrap below is the adapter's job — don't
+  // wrap it again.
+  const rows = await request<Row[]>(
     `${base}/api/sessions`,
     undefined,
     API_READ_TIMEOUT_MS,
   );
-  return body.sessions.map((s) => {
+  return rows.map((s) => {
     const key = `websocket:${s.id}`;
     const createdAt = s.createdAt ?? null;
     const updatedAt = s.updatedAt ?? null;
@@ -122,12 +125,14 @@ export async function fetchWebuiThread(
 ): Promise<WebuiThreadPersistedPayload | null> {
   const chatId = splitKey(key).chatId;
   try {
-    const body = await request<{ messages: Array<{ id?: string; role: string; content: string; createdAt: string; metadata?: Record<string, unknown> }> }>(
+    // The gateway returns the message list directly as a JSON array, NOT
+    // wrapped in `{ messages: [...] }`.
+    const serverMessages = await request<Array<{ id?: string; role: string; content: string; createdAt: string; metadata?: Record<string, unknown> }>>(
       `${base}/api/sessions/${encodeURIComponent(chatId)}/messages`,
       undefined,
       API_READ_TIMEOUT_MS,
     );
-    const messages = (body.messages ?? []).map((m, idx) => {
+    const messages = (serverMessages ?? []).map((m, idx) => {
       const createdAtEpoch = Date.parse(m.createdAt) || Date.now();
       return {
         id: m.id ?? `hist-${idx}`,

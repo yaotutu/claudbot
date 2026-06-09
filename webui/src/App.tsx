@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { useSessions } from "@/hooks/useSessions";
+import { pickInitialActiveSession } from "@/lib/active-session";
 import { fetchBootstrap } from "@/lib/bootstrap";
 import { ClaudebotClient } from "@/lib/claudebot-client";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -19,7 +20,7 @@ import type { ChatSummary } from "@/lib/types";
 type BootState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; client: ClaudebotClient; modelName: string | null };
+  | { status: "ready"; client: ClaudebotClient; modelName: string | null; lastActiveSessionId: string | null };
 
 function pickWsUrl(wsPath: string, fallbackPort: number): string {
   if (typeof window === "undefined") {
@@ -49,7 +50,12 @@ export default function App() {
         client = new ClaudebotClient({ url: wsUrl, reconnect: true });
         client.setRuntimeModelName(bs.model_name ?? null);
         client.connect();
-        setBoot({ status: "ready", client, modelName: bs.model_name ?? null });
+        setBoot({
+          status: "ready",
+          client,
+          modelName: bs.model_name ?? null,
+          lastActiveSessionId: bs.lastActiveSessionId ?? null,
+        });
       } catch (e) {
         if (cancelled) return;
         const message = e instanceof Error ? e.message : String(e);
@@ -86,12 +92,12 @@ export default function App() {
 
   return (
     <ClientProvider client={boot.client} token="" modelName={boot.modelName}>
-      <Shell />
+      <Shell lastActiveSessionId={boot.lastActiveSessionId} />
     </ClientProvider>
   );
 }
 
-function Shell() {
+function Shell({ lastActiveSessionId }: { lastActiveSessionId: string | null }) {
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -101,10 +107,12 @@ function Shell() {
 
   useEffect(() => {
     if (activeKey) return;
-    const inbox = sessions.find((s) => s.chatId === "inbox");
-    const first = inbox ?? sessions[0];
-    if (first) setActiveKey(first.key);
-  }, [sessions, activeKey]);
+    // Pick the session the user was last on. If we can't find it (e.g. it was
+    // the empty `inbox` placeholder, or it has been deleted), fall through to
+    // the most recently updated session so the UI doesn't open onto a blank.
+    const next = pickInitialActiveSession(sessions, lastActiveSessionId);
+    if (next) setActiveKey(next);
+  }, [sessions, activeKey, lastActiveSessionId]);
 
   const activeSession: ChatSummary | null = useMemo(() => {
     if (!activeKey) return null;

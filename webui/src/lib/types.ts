@@ -255,6 +255,8 @@ export interface BootstrapResponse {
   ws_url?: string | null;
   expires_in: number;
   model_name?: string | null;
+  /** Last session the user had open on the server, if any. */
+  lastActiveSessionId?: string | null;
 }
 
 export type RestartBehavior = "none" | "nextTurn" | "engineRestart" | "appRestart";
