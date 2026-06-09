@@ -1,6 +1,5 @@
 // Service container: per-instance wiring of stores, registry, runner, gateway helpers.
 
-import { resolveRuntimeConfig } from "../config/loader.ts";
 import type { RuntimeConfig } from "../config/schema.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
 import { SessionStore } from "../sessions/store.ts";
@@ -49,12 +48,30 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   await profile.init();
   const memory = new MemoryStore(paths.memoryFile);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.runsFile);
-  const queryFactory = deps.queryFactory ?? makeDefaultQueryFactory(config, paths.toolAuditFile);
-  const scheduler = new SchedulerService(schedulerStore, async (sched, run) => {
-    const ctx = { source: "schedule_turn" as const, home: paths.home, workspacePath: paths.workspace, timezone: config.gateway.host ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC", sessionId: undefined, scheduleRunId: run.id, services: null };
-    return runScheduledTurn(sched, run, config, paths, ctx, queryFactory);
+
+  // Build the tool registry. The registry depends on the SchedulerService for
+  // the schedule_* tools, and the scheduler's executor depends on the
+  // queryFactory, which depends on the registry. We break the cycle by:
+  //   1. Building a placeholder SchedulerService that we'll swap out below.
+  //   2. Building the registry with the placeholder.
+  //   3. Building the real queryFactory closed over the real registry.
+  //   4. Building the real SchedulerService that uses the real queryFactory.
+  //   5. Pointing the placeholder → real (the registry holds a reference).
+  const placeholderScheduler: SchedulerService = new SchedulerService(schedulerStore, async () => {
+    throw new Error("placeholder scheduler invoked before real one was wired");
   });
-  const toolRegistry = buildToolRegistry(config, paths.toolAuditFile, { scheduler, memory, profile });
+  const toolRegistry = buildToolRegistry(config, paths.toolAuditFile, {
+    scheduler: placeholderScheduler,
+    memory,
+    profile,
+  });
+  const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config);
+  const realScheduler = new SchedulerService(schedulerStore, async (sched, run) => {
+    return runScheduledTurn(sched, run, config, paths, queryFactory);
+  });
+  // Re-point the registry's scheduler reference to the real one.
+  (toolRegistry as unknown as { scheduler: SchedulerService }).scheduler = realScheduler;
+
   const makeRunner = (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string): ClaudeRunner => {
     return new ClaudeRunner(
       {
@@ -74,7 +91,19 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
       queryFactory,
     );
   };
-  return { config, paths, sessions, runtimeState, profile, memory, schedulerStore, scheduler, toolRegistry, queryFactory, makeRunner };
+  return {
+    config,
+    paths,
+    sessions,
+    runtimeState,
+    profile,
+    memory,
+    schedulerStore,
+    scheduler: realScheduler,
+    toolRegistry,
+    queryFactory,
+    makeRunner,
+  };
 }
 
 function buildToolRegistry(
@@ -93,25 +122,17 @@ function buildToolRegistry(
   return registry;
 }
 
-function makeDefaultQueryFactory(config: RuntimeConfig, _auditPath: string): QueryFactory {
-  return makeRealQueryFactory.bind(null) as unknown as QueryFactory;
-}
-
 async function runScheduledTurn(
   sched: { id: string; message: string; timezone: string },
   run: { id: string; startedAt: string },
   _config: RuntimeConfig,
   paths: RuntimePaths,
-  _ctx: { source: "schedule_turn"; home: string; workspacePath: string; timezone: string; sessionId?: string; scheduleRunId?: string; services: unknown },
   _qf: QueryFactory,
 ): Promise<string> {
   // For MVP, the schedule executor is a stub: the schedule "completes" by
   // recording its own message as the result. A real implementation would
   // dispatch a one-off ClaudeRunner.run() against the same queryFactory
   // and stream the final result back to the scheduler.
-  // Wiring ClaudeRunner from inside this closure would require the runner
-  // factory; for now we return a synthetic result so the scheduler lifecycle
-  // (run record, lastStatus, nextRunAt advancement) is exercised end-to-end.
   const state = await readRuntimeStateOrEmpty(paths.runtimeStateFile);
   const target = state.lastActiveSessionId || "inbox";
   const sessions = new SessionStore(paths.sessionsDir);

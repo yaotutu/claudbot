@@ -86,6 +86,13 @@ export class ClaudebotClient {
   private currentUrl: string;
   private status_: ConnectionStatus = "idle";
   private readyChatId: string | null = null;
+  /**
+   * The claudebot session id the user most recently activated. The server
+   * forwards Claude SDK events with `sessionId` set to the *Claude* session
+   * (a different UUID), so we can't trust that field for routing. We
+   * instead fan agent.* events out to the last attached claudebot session.
+   */
+  private currentChatId: string | null = null;
   private intentionallyClosed = false;
   private modelName: string | null = null;
 
@@ -269,6 +276,7 @@ export class ClaudebotClient {
 
   attach(chatId: string): void {
     this.knownChats.add(chatId);
+    this.currentChatId = chatId;
     if (this.socket?.readyState === WS_OPEN) {
       this.queueSend({ type: "session.activate", sessionId: chatId });
     }
@@ -324,6 +332,10 @@ export class ClaudebotClient {
   }
 
   private dispatchServerMessage(msg: WsServerMessage): void {
+    // The `sessionId` on agent.* frames is the Claude SDK session, NOT the
+    // claudebot session the user activated. We use `currentChatId` (set by
+    // `attach`/`newChat`) as the routing key for streaming events.
+    const rid = this.currentChatId ?? "";
     switch (msg.type) {
       case "session.updated": {
         this.emitSessionUpdate(msg.sessionId, "metadata");
@@ -341,20 +353,17 @@ export class ClaudebotClient {
         return;
       }
       case "agent.text_delta": {
-        const sid = msg.sessionId ?? this.readyChatId ?? "";
-        this.dispatch(sid, { event: "delta", chat_id: sid, text: msg.text });
+        this.dispatch(rid, { event: "delta", chat_id: rid, text: msg.text });
         return;
       }
       case "agent.thinking_delta": {
-        const sid = msg.sessionId ?? this.readyChatId ?? "";
-        this.dispatch(sid, { event: "reasoning_delta", chat_id: sid, text: msg.thinking });
+        this.dispatch(rid, { event: "reasoning_delta", chat_id: rid, text: msg.thinking });
         return;
       }
       case "agent.tool_start": {
-        const sid = msg.sessionId ?? this.readyChatId ?? "";
-        this.dispatch(sid, {
+        this.dispatch(rid, {
           event: "message",
-          chat_id: sid,
+          chat_id: rid,
           text: "",
           tool_events: [
             {
@@ -369,10 +378,9 @@ export class ClaudebotClient {
         return;
       }
       case "agent.tool_result": {
-        const sid = msg.sessionId ?? this.readyChatId ?? "";
-        this.dispatch(sid, {
+        this.dispatch(rid, {
           event: "message",
-          chat_id: sid,
+          chat_id: rid,
           text: "",
           tool_events: [
             {
@@ -387,26 +395,24 @@ export class ClaudebotClient {
         return;
       }
       case "agent.status": {
-        const sid = msg.sessionId ?? this.readyChatId ?? "";
         const running = /run|think|stream/i.test(msg.status);
         if (running) {
           const startedAt = Math.floor(Date.now() / 1000);
-          this.runStartedAtByChatId.set(sid, startedAt);
-          this.emitRunStatus(sid, startedAt);
-          this.dispatch(sid, { event: "goal_status", chat_id: sid, status: "running", started_at: startedAt });
+          this.runStartedAtByChatId.set(rid, startedAt);
+          this.emitRunStatus(rid, startedAt);
+          this.dispatch(rid, { event: "goal_status", chat_id: rid, status: "running", started_at: startedAt });
         }
         return;
       }
       case "agent.turn_done": {
-        const sid = msg.sessionId;
-        if (this.runStartedAtByChatId.has(sid)) {
-          this.runStartedAtByChatId.delete(sid);
-          this.emitRunStatus(sid, null);
+        if (this.runStartedAtByChatId.has(rid)) {
+          this.runStartedAtByChatId.delete(rid);
+          this.emitRunStatus(rid, null);
         }
         const goalState: GoalStateWsPayload = { active: false };
-        this.goalStateByChatId.set(sid, goalState);
-        this.dispatch(sid, { event: "turn_end", chat_id: sid, goal_state: goalState });
-        this.emitSessionUpdate(sid, "thread");
+        this.goalStateByChatId.set(rid, goalState);
+        this.dispatch(rid, { event: "turn_end", chat_id: rid, goal_state: goalState });
+        this.emitSessionUpdate(rid, "thread");
         return;
       }
       case "agent.error": {
