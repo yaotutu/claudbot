@@ -95,10 +95,9 @@ export class ClaudebotClient {
   private status_: ConnectionStatus = "idle";
   private readyChatId: string | null = null;
   /**
-   * The claudebot session id the user most recently activated. The server
-   * forwards Claude SDK events with `sessionId` set to the *Claude* session
-   * (a different UUID), so we can't trust that field for routing. We
-   * instead fan agent.* events out to the last attached claudebot session.
+   * The chat the user most recently activated. We use this as the routing
+   * key for streaming events so a stale `sessionId` on a wire frame can't
+   * make deltas land in the wrong thread.
    */
   private currentChatId: string | null = null;
   private intentionallyClosed = false;
@@ -356,9 +355,9 @@ export class ClaudebotClient {
   }
 
   private dispatchServerMessage(msg: WsServerMessage): void {
-    // The `sessionId` on agent.* frames is the Claude SDK session, NOT the
-    // claudebot session the user activated. We use `currentChatId` (set by
-    // `attach`/`newChat`) as the routing key for streaming events.
+    // Use `currentChatId` (set by `attach`/`newChat`) as the routing key for
+    // streaming events. The wire's `sessionId` on agent.* frames can be stale
+    // (it tracks the last-seen SDK session, not necessarily the active one).
     const rid = this.currentChatId ?? "";
     switch (msg.type) {
       case "session.updated": {

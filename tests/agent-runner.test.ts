@@ -1,5 +1,6 @@
 import { describe, expect, test, mock } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
@@ -10,6 +11,7 @@ import { ToolRegistry } from "../src/tools/registry.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { MemoryStore } from "../src/memory/store.ts";
+import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
 import type { NormalizedEvent, SdkMessage } from "../src/agent/events.ts";
 
 // Capture every call to the mocked SDK so individual tests can assert on what
@@ -186,8 +188,11 @@ describe("makeRealQueryFactory", () => {
   ): Promise<Record<string, unknown>> {
     captured = { args: undefined, options: undefined };
     const dir = await mkdtemp(join(tmpdir(), "claudebot-rq-"));
+    const sdkDir = mkdtempSync(join(tmpdir(), "claudebot-sdk-"));
+    const sessionsDir = mkdtempSync(join(tmpdir(), "claudebot-sess-"));
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const factory = makeRealQueryFactory(registry, config);
+    const sessionStore = createClaudebotSessionStore({ sessionsDir });
+    const factory = makeRealQueryFactory(registry, config, sdkDir, sessionStore);
     // Consume the generator enough to trigger the SDK call (which happens on
     // first `for await` iteration, before any message is yielded).
     for await (const _msg of factory({

@@ -1,9 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, mock } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SchedulerStore } from "../src/scheduler/store.ts";
 import { SchedulerService } from "../src/scheduler/service.ts";
+import { buildServices } from "../src/runtime/services.ts";
+import { resolveRuntimeConfig } from "../src/config/loader.ts";
+import { runtimePaths } from "../src/config/paths.ts";
+import type { SdkMessage } from "../src/agent/events.ts";
+import type { QueryFactory } from "../src/agent/runner.ts";
 
 describe("scheduler", () => {
   test("creates schedule with next run", async () => {
@@ -89,5 +94,64 @@ describe("scheduler", () => {
     expect(after.state.nextRunAt).not.toBe(past);
     expect(new Date(after.state.nextRunAt).getTime()).toBeGreaterThan(Date.now() - 60_000);
     expect(after.state.runCount).toBe(1);
+  });
+});
+
+// These exercise the real `runScheduledTurn` wired into the service container
+// in T10. We use a recording QueryFactory so we can assert the runner was
+// actually dispatched (it should be — session creation is the SDK's job, not
+// the scheduler's). The executor is the internal one in services.ts; we don't
+// have a way to swap it without modifying production code, so we rely on the
+// real path with a controlled QueryFactory.
+describe("runScheduledTurn (wired into services)", () => {
+  function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
+    const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
+    const factory: QueryFactory = async function* (args) {
+      (calls as Array<{ prompt: string; resumeSessionId?: string }>).push({ prompt: args.prompt, resumeSessionId: args.resumeSessionId });
+      for (const e of events) yield e;
+    };
+    return Object.assign(factory, { calls: calls as Array<{ prompt: string; resumeSessionId?: string }> });
+  }
+
+  test("dispatches runner.run when there is an active session", async () => {
+    const init = { type: "system", subtype: "init", session_id: "sess-1" } as SdkMessage;
+    const result = { type: "result", session_id: "sess-1", result: "scheduled output", is_error: false } as SdkMessage;
+    const factory = makeRecordingQueryFactory([init, result]);
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-rt-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const services = await buildServices({ config, paths, queryFactory: factory });
+
+    // Seed the active session so runScheduledTurn has a target.
+    await services.runtimeState.setLastActiveSession("sess-1", "user_open");
+
+    const sched = await services.scheduler.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "tick" });
+    const run = await services.scheduler.runNow(sched.id);
+
+    expect(run.status).toBe("succeeded");
+    expect(run.result).toBe("scheduled output");
+    // The runner was invoked once with a prompt tagged with the schedule id.
+    expect(factory.calls.length).toBe(1);
+    expect(factory.calls[0].prompt).toContain(sched.id);
+    expect(factory.calls[0].prompt).toContain("tick");
+  });
+
+  test("skips when there is no active session", async () => {
+    const factory = makeRecordingQueryFactory([]);
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-rt-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const services = await buildServices({ config, paths, queryFactory: factory });
+
+    // No lastActiveSessionId is set.
+    const sched = await services.scheduler.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "tick" });
+    const run = await services.scheduler.runNow(sched.id);
+
+    expect(run.status).toBe("succeeded");
+    expect(run.result).toContain("skipped: no active session");
+    // The runner was NOT invoked — there's no target to resume.
+    expect(factory.calls.length).toBe(0);
   });
 });

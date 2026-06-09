@@ -107,9 +107,9 @@ function Shell({ lastActiveSessionId }: { lastActiveSessionId: string | null }) 
 
   useEffect(() => {
     if (activeKey) return;
-    // Pick the session the user was last on. If we can't find it (e.g. it was
-    // the empty `inbox` placeholder, or it has been deleted), fall through to
-    // the most recently updated session so the UI doesn't open onto a blank.
+    // Pick the session the user was last on. If we can't find it (e.g. it has
+    // been deleted), fall through to the most recently updated session so the
+    // UI doesn't open onto a blank.
     const next = pickInitialActiveSession(sessions, lastActiveSessionId);
     if (next) setActiveKey(next);
   }, [sessions, activeKey, lastActiveSessionId]);
