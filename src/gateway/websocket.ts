@@ -16,7 +16,7 @@ export function makeWsHandlers(services: ServiceContainer) {
 
   return {
     open(ws: ServerWebSocket<WsData>) {
-      ws.data = { sessionId: "inbox", services, send: (m) => ws.send(JSON.stringify(m)) };
+      ws.data = { sessionId: "", services, send: (m) => ws.send(JSON.stringify(m)) };
       connections.add(ws);
     },
     message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
@@ -59,8 +59,9 @@ async function handleClientMessage(
     }
     case "chat.user_message": {
       const state = await services.runtimeState.get();
-      let sessionId = state.lastActiveSessionId || "inbox";
-      if (ws.data.sessionId && ws.data.sessionId !== "inbox") sessionId = ws.data.sessionId;
+      const sessionId = ws.data.sessionId && ws.data.sessionId !== "pending"
+        ? ws.data.sessionId
+        : (state.lastActiveSessionId || null);
       await runUserTurn(ws, services, sessionId, msg.content);
       return;
     }
@@ -74,39 +75,40 @@ async function handleClientMessage(
 export async function runUserTurn(
   ws: ServerWebSocket<WsData>,
   services: ServiceContainer,
-  sessionId: string,
+  sessionId: string | null,
   content: string,
 ): Promise<void> {
-  const session = await services.sessions.getOrCreateInbox().then(async (inbox) => {
-    if (sessionId === "inbox") return inbox;
-    return (await services.sessions.get(sessionId)) || inbox;
-  });
-  sessionId = session.id;
-  await services.runtimeState.setLastActiveSession(sessionId, "user_message");
-  ws.data.sessionId = sessionId;
   const send = (m: WsServerMessage) => sendTo(ws, m);
 
-  const userMsg = await services.sessions.appendMessage(sessionId, { role: "user", content, metadata: {} });
-  send({ type: "message.appended", sessionId, message: userMsg.messages[userMsg.messages.length - 1] });
-  // No session.updated here: the client receives the user message via
-  // message.appended (which carries the full content) and updates the
-  // sidebar's local session state directly — a session.updated here would
-  // cause the WebUI to refetch the full session list, which is wasteful
-  // and was the root cause of the request storm.
+  // Resolve session: either caller-supplied, last active, or null (let SDK create)
+  let sdkSessionId: string | undefined;
+  if (sessionId) {
+    sdkSessionId = sessionId;
+  } else {
+    const state = await services.runtimeState.get();
+    sdkSessionId = state.lastActiveSessionId || undefined;
+  }
 
-  const runner = services.makeRunner("user_turn", sessionId);
-  const resumeId = session.claudeSessionId || undefined;
-  const collected: string[] = [];
+  // We need a session id before we can persist anything. If we don't have one
+  // yet, run the query and capture the new id from system/init or the result.
+  const runner = services.makeRunner("user_turn", sdkSessionId ?? "pending");
+  let lastSessionId: string | undefined = sdkSessionId;
+  let collected = "";
   let turnErrored = false;
   let finalResult = "";
-  let lastSessionId: string | undefined;
+
   try {
-    for await (const ev of runner.run({ prompt: content, resumeSessionId: resumeId })) {
+    for await (const ev of runner.run({ prompt: content, resumeSessionId: sdkSessionId })) {
+      // Surface mirror_error so WebUI status reflects SDK health
+      if (ev.type === "error" && ev.message.includes("mirror_error")) {
+        send({ type: "agent.status", status: "mirror_error", sessionId: ev.sessionId });
+        continue;
+      }
       forward(send, ev);
-      if (ev.type === "text_delta") collected.push(ev.text);
+      if (ev.type === "text_delta") collected += ev.text;
       if (ev.type === "turn_done") {
         finalResult = ev.result;
-        lastSessionId = ev.sessionId || lastSessionId;
+        if (ev.sessionId) lastSessionId = ev.sessionId;
       }
       if (ev.type === "error") {
         turnErrored = true;
@@ -117,19 +119,29 @@ export async function runUserTurn(
     turnErrored = true;
     finalResult = `[error] ${err instanceof Error ? err.message : String(err)}`;
   }
+
   if (lastSessionId) {
-    session.claudeSessionId = lastSessionId;
-    // Persist so the next turn can resume the SDK session and the model
-    // can carry context (and avoid re-reading tool definitions etc).
-    await services.sessions.save(session);
+    await services.runtimeState.setLastActiveSession(lastSessionId, "user_message");
+    ws.data.sessionId = lastSessionId;
   }
-  const finalText = collected.join("") || finalResult || (turnErrored ? "(no response)" : "(no response)");
-  const assistantMsg = await services.sessions.appendMessage(sessionId, {
-    role: "assistant",
-    content: finalText,
-    metadata: turnErrored ? { error: true } : {},
+
+  // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
+  // beat to flush before we ack the WebUI (50ms is plenty for small batches).
+  await new Promise((r) => setTimeout(r, 50));
+
+  const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
+  const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
+  send({
+    type: "message.appended",
+    sessionId: activeSdkId,
+    message: {
+      id: `local-${Date.now()}`,
+      role: turnErrored ? "system" : "assistant",
+      content: finalText,
+      createdAt: new Date().toISOString(),
+      metadata: turnErrored ? { error: true } : {},
+    },
   });
-  send({ type: "message.appended", sessionId, message: assistantMsg.messages[assistantMsg.messages.length - 1] });
 }
 
 function sendTo(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {
