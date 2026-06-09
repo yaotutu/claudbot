@@ -15,6 +15,16 @@ import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
 import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
+import { getSessionInfo, renameSession, deleteSession } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionStore as SDKSessionStore, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
+
+export type SdkSessionsFacade = {
+  store: SDKSessionStore;
+  list: (projectKey: string) => Promise<Array<{ sessionId: string; mtime: number }>>;
+  info: (sessionId: string) => Promise<SDKSessionInfo | undefined>;
+  rename: (sessionId: string, title: string) => Promise<void>;
+  remove: (sessionId: string) => Promise<void>;
+};
 
 export type ServiceContainer = {
   config: RuntimeConfig;
@@ -27,6 +37,7 @@ export type ServiceContainer = {
   scheduler: SchedulerService;
   toolRegistry: ToolRegistry;
   queryFactory: QueryFactory;
+  sdkSessions: SdkSessionsFacade;
   makeRunner: (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string) => ClaudeRunner;
 };
 
@@ -75,6 +86,19 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     profile,
   });
   const sessionStore = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+  const sdkSessions: SdkSessionsFacade = {
+    store: sessionStore,
+    list: (projectKey: string) => sessionStore.listSessions!(projectKey),
+    info: async (sessionId: string) => {
+      return getSessionInfo(sessionId, { sessionStore });
+    },
+    rename: async (sessionId: string, title: string) => {
+      await renameSession(sessionId, title, { sessionStore });
+    },
+    remove: async (sessionId: string) => {
+      await deleteSession(sessionId, { sessionStore });
+    },
+  };
   const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sessionStore);
   const realScheduler = new SchedulerService(schedulerStore, async (sched, run) => {
     return runScheduledTurn(sched, run, sessions, paths, queryFactory);
@@ -112,6 +136,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     scheduler: realScheduler,
     toolRegistry,
     queryFactory,
+    sdkSessions,
     makeRunner,
   };
 }
