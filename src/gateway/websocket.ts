@@ -115,6 +115,9 @@ export async function runUserTurn(
   }
   if (lastSessionId) {
     session.claudeSessionId = lastSessionId;
+    // Persist so the next turn can resume the SDK session and the model
+    // can carry context (and avoid re-reading tool definitions etc).
+    await services.sessions.save(session);
   }
   const finalText = collected.join("") || finalResult || (turnErrored ? "(no response)" : "(no response)");
   const assistantMsg = await services.sessions.appendMessage(sessionId, {
