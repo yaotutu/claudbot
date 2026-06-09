@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { ensureDir, readJson, writeJsonAtomic } from "../utils/fs.ts";
 import { newId } from "../utils/id.ts";
-import type { SessionMessage, SessionRecord } from "./types.ts";
+import type { SessionRecord } from "./types.ts";
 
 function now(): string {
   return new Date().toISOString();
@@ -20,7 +20,6 @@ export class SessionStore {
       claudeSessionId: "",
       createdAt: time,
       updatedAt: time,
-      messages: [],
     };
     await this.save(record);
     return record;
@@ -30,25 +29,9 @@ export class SessionStore {
     return readJson<SessionRecord | null>(this.pathFor(id), null);
   }
 
-  async getOrCreateInbox(): Promise<SessionRecord> {
-    return (await this.get("inbox")) || this.create("Inbox", "inbox");
-  }
-
   async save(record: SessionRecord): Promise<void> {
     record.updatedAt = now();
     await writeJsonAtomic(this.pathFor(record.id), record);
-  }
-
-  async appendMessage(sessionId: string, message: Omit<SessionMessage, "id" | "createdAt">): Promise<SessionRecord> {
-    const record = (await this.get(sessionId)) || (sessionId === "inbox" ? await this.getOrCreateInbox() : await this.create("New chat", sessionId));
-    record.messages.push({
-      id: newId("msg"),
-      createdAt: now(),
-      ...message,
-    });
-    record.preview = message.content.slice(0, 120);
-    await this.save(record);
-    return record;
   }
 
   async list(): Promise<SessionRecord[]> {
