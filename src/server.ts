@@ -35,7 +35,7 @@ const server = Bun.serve({
       const f = Bun.file(INDEX_HTML_PATH);
       if (await f.exists()) return new Response(f, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
-    if (url.pathname.startsWith("/assets/") || url.pathname === "/favicon.ico") {
+    if (url.pathname.startsWith("/assets/") || url.pathname.startsWith("/brand/") || url.pathname === "/favicon.ico") {
       const f = Bun.file(join(WEBUI_DIST, url.pathname));
       if (await f.exists()) return new Response(f);
     }
