@@ -1,9 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, mock } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
-import { ClaudeRunner, type QueryFactory } from "../src/agent/runner.ts";
+import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../src/agent/runner.ts";
 import { buildSystemPrompt } from "../src/agent/prompt.ts";
 import { AgentProfileStore } from "../src/agent/profile.ts";
 import { ToolRegistry } from "../src/tools/registry.ts";
@@ -11,6 +11,25 @@ import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { MemoryStore } from "../src/memory/store.ts";
 import type { NormalizedEvent, SdkMessage } from "../src/agent/events.ts";
+
+// Capture every call to the mocked SDK so individual tests can assert on what
+// was passed. We mock the whole module because `makeRealQueryFactory` and the
+// tool-adapter both pull from `@anthropic-ai/claude-agent-sdk`.
+let captured: { args: unknown; options: Record<string, unknown> | undefined } = { args: undefined, options: undefined };
+mock.module("@anthropic-ai/claude-agent-sdk", () => ({
+  query: (args: { prompt: unknown; options: Record<string, unknown> }) => {
+    captured.args = args;
+    captured.options = args.options;
+    return (async function* () {})();
+  },
+  createSdkMcpServer: (config: unknown) => ({ _isMock: true, config }),
+  tool: (name: string, description: string, schema: unknown, handler: unknown) => ({
+    name,
+    description,
+    schema,
+    handler,
+  }),
+}));
 
 const fixtureDir = "tests/fixtures/sdk-events";
 
@@ -155,5 +174,120 @@ describe("claude runner normalization", () => {
     if (textEv && textEv.type === "text_delta") {
       expect(textEv.sessionId).toBeTruthy();
     }
+  });
+});
+
+describe("makeRealQueryFactory", () => {
+  // Helper: invoke the factory and return the options that were passed to the
+  // mocked SDK's `query()`. Resets `captured` first so a test only sees its
+  // own call.
+  async function invokeFactoryAndCapture(
+    config: Parameters<typeof makeRealQueryFactory>[1],
+  ): Promise<Record<string, unknown>> {
+    captured = { args: undefined, options: undefined };
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-rq-"));
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const factory = makeRealQueryFactory(registry, config);
+    // Consume the generator enough to trigger the SDK call (which happens on
+    // first `for await` iteration, before any message is yielded).
+    for await (const _msg of factory({
+      prompt: "hello",
+      systemPrompt: "system",
+      toolContext: {
+        source: "user_turn",
+        home: dir,
+        workspacePath: join(dir, "ws"),
+        timezone: "UTC",
+        sessionId: "sess_test",
+        services: null,
+      },
+    })) {
+      void _msg;
+    }
+    if (!captured.options) throw new Error("SDK query() was not called");
+    return captured.options;
+  }
+
+  test("translates config.claudeCode.baseUrl/apiKey into SDK env", async () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/x",
+        claudeCode: {
+          baseUrl: "http://192.168.55.222:20128",
+          apiKey: "sk-test-key",
+          model: "glm-cn/glm-5.1",
+          permissionMode: "bypassPermissions",
+          maxTurns: 50,
+        },
+      },
+      {},
+    );
+    const opts = await invokeFactoryAndCapture(config);
+    const env = opts.env as Record<string, string | undefined>;
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://192.168.55.222:20128");
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-test-key");
+    // process.env must be preserved (PATH, HOME, etc.) per SDK docs.
+    expect(env.PATH).toBe(process.env.PATH);
+  });
+
+  test("falls back to process.env when config has no baseUrl/apiKey", async () => {
+    // Pin process.env for the duration of the test so the assertion is stable.
+    const origUrl = process.env.ANTHROPIC_BASE_URL;
+    const origKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_BASE_URL = "http://from-process-env";
+    process.env.ANTHROPIC_API_KEY = "sk-from-process-env";
+    try {
+      const config = resolveRuntimeConfig({ home: "/tmp/x" }, {});
+      const opts = await invokeFactoryAndCapture(config);
+      const env = opts.env as Record<string, string | undefined>;
+      expect(env.ANTHROPIC_BASE_URL).toBe("http://from-process-env");
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-from-process-env");
+    } finally {
+      if (origUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = origUrl;
+      if (origKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = origKey;
+    }
+  });
+
+  test("config overrides process.env when both are set", async () => {
+    const origUrl = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "http://from-process-env";
+    try {
+      const config = resolveRuntimeConfig(
+        {
+          home: "/tmp/x",
+          claudeCode: { baseUrl: "http://from-config", apiKey: "sk-config" },
+        },
+        {},
+      );
+      const opts = await invokeFactoryAndCapture(config);
+      const env = opts.env as Record<string, string | undefined>;
+      expect(env.ANTHROPIC_BASE_URL).toBe("http://from-config");
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-config");
+    } finally {
+      if (origUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = origUrl;
+    }
+  });
+
+  test("model, permissionMode, maxTurns are still passed through", async () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/x",
+        claudeCode: {
+          baseUrl: "http://x",
+          apiKey: "sk-x",
+          model: "glm-cn/glm-5.1",
+          permissionMode: "bypassPermissions",
+          maxTurns: 42,
+        },
+      },
+      {},
+    );
+    const opts = await invokeFactoryAndCapture(config);
+    expect(opts.model).toBe("glm-cn/glm-5.1");
+    expect(opts.permissionMode).toBe("bypassPermissions");
+    expect(opts.maxTurns).toBe(42);
   });
 });

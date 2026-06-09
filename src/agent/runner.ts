@@ -91,6 +91,16 @@ export function makeRealQueryFactory(
   return async function* ({ prompt, resumeSessionId, systemPrompt, toolContext }) {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const mcpServer = createClaudebotSdkMcpServer(registry, toolContext);
+    // The SDK's `Options.env` is the only way to point the Claude Code
+    // subprocess at a non-Anthropic endpoint — it has no direct `baseUrl`/
+    // `apiKey` fields. We translate our config into the env vars the
+    // subprocess reads, and spread `process.env` first so the subprocess
+    // still has PATH, HOME, etc. Config wins over process.env when set.
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      ...(config.claudeCode.baseUrl ? { ANTHROPIC_BASE_URL: config.claudeCode.baseUrl } : {}),
+      ...(config.claudeCode.apiKey ? { ANTHROPIC_API_KEY: config.claudeCode.apiKey } : {}),
+    };
     const stream = query({
       prompt,
       options: {
@@ -98,6 +108,7 @@ export function makeRealQueryFactory(
         systemPrompt,
         permissionMode: config.claudeCode.permissionMode,
         maxTurns: config.claudeCode.maxTurns,
+        env,
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         mcpServers: { claudebot: mcpServer },
       },
