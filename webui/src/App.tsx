@@ -1,10 +1,10 @@
 // Claudebot WebUI entry. Wires bootstrap → client → Sidebar + ThreadShell.
 //
-// This is a deliberately small replacement for the full nanobot App.tsx:
-// claudebot has no auth secret, no settings view, no skills view, and no
-// workspace scoping. The shell renders the copied Sidebar and ThreadShell
-// components and supplies no-op handlers for the props claudebot doesn't
-// implement.
+// This is a deliberately small replacement for the full nanobot App.tsx.
+// Most of the Sidebar's chrome (Skills, Settings, project controls, etc.)
+// is rendered from the copied nanobot component, but the handlers here
+// are no-ops — claudebot has no auth secret, no settings view, no
+// skills catalog, and no workspace scoping.
 
 import { useEffect, useMemo, useState } from "react";
 

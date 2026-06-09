@@ -5,3 +5,6 @@ dist/
 .env
 .env.local
 .claudebot/
+# Stray Bun writeJsonAtomic temp files (the pid prefix prevents globbing by
+# the more obvious patterns above).
+.*.tmp
