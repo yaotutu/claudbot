@@ -54,6 +54,47 @@ export class SchedulerService {
     return this.store.listSchedules();
   }
 
+  async update(id: string, patch: Partial<Pick<ScheduleRecord, "name" | "cronExpr" | "timezone" | "message">>): Promise<ScheduleRecord> {
+    const schedules = await this.store.listSchedules();
+    const idx = schedules.findIndex((s) => s.id === id);
+    if (idx < 0) throw new Error(`schedule not found: ${id}`);
+    const target = schedules[idx];
+    if (patch.cronExpr || patch.timezone) {
+      // Validate the new combined cron/timezone before persisting.
+      this.nextRunAt(patch.cronExpr || target.cronExpr, patch.timezone || target.timezone);
+    }
+    const next: ScheduleRecord = {
+      ...target,
+      ...patch,
+      state: {
+        ...target.state,
+        ...(patch.cronExpr || patch.timezone
+          ? { nextRunAt: this.nextRunAt(patch.cronExpr || target.cronExpr, patch.timezone || target.timezone) }
+          : {}),
+      },
+      updatedAt: now(),
+    };
+    schedules[idx] = next;
+    await this.store.saveSchedules(schedules);
+    return next;
+  }
+
+  async delete(id: string): Promise<void> {
+    const schedules = await this.store.listSchedules();
+    const next = schedules.filter((s) => s.id !== id);
+    if (next.length === schedules.length) throw new Error(`schedule not found: ${id}`);
+    await this.store.saveSchedules(next);
+  }
+
+  async setEnabled(id: string, enabled: boolean): Promise<ScheduleRecord> {
+    const schedules = await this.store.listSchedules();
+    const idx = schedules.findIndex((s) => s.id === id);
+    if (idx < 0) throw new Error(`schedule not found: ${id}`);
+    schedules[idx] = { ...schedules[idx], enabled, updatedAt: now() };
+    await this.store.saveSchedules(schedules);
+    return schedules[idx];
+  }
+
   async runNow(id: string): Promise<ScheduleRunRecord> {
     const schedules = await this.store.listSchedules();
     const schedule = schedules.find((item) => item.id === id);
