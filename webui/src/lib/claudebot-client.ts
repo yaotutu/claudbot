@@ -25,6 +25,13 @@ type SessionUpdateHandler = (
 ) => void;
 type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
 type ErrorHandler = (error: StreamError) => void;
+type MessageRole = "user" | "assistant" | "system";
+type MessageAppendedHandler = (
+  chatId: string,
+  content: string,
+  role: MessageRole,
+  createdAt: string,
+) => void;
 
 interface PendingNewChat {
   resolve: (chatId: string) => void;
@@ -70,6 +77,7 @@ export class ClaudebotClient {
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
+  private messageAppendedHandlers = new Set<MessageAppendedHandler>();
   private chatHandlers = new Map<string, Set<EventHandler>>();
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
   private static readonly PENDING_INBOUND_MAX = 2000;
@@ -163,6 +171,19 @@ export class ClaudebotClient {
     this.errorHandlers.add(handler);
     return () => {
       this.errorHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Subscribe to message.appended events for any chat. The handler is
+   * called with the chatId, full content, role, and createdAt — enough
+   * for the sidebar to update its local session state (preview, updatedAt)
+   * without a server roundtrip.
+   */
+  onMessageAppended(handler: MessageAppendedHandler): Unsubscribe {
+    this.messageAppendedHandlers.add(handler);
+    return () => {
+      this.messageAppendedHandlers.delete(handler);
     };
   }
 
@@ -345,7 +366,19 @@ export class ClaudebotClient {
         return;
       }
       case "message.appended": {
-        this.emitSessionUpdate(msg.sessionId, "thread");
+        // Notify message-appended subscribers (e.g. the sidebar) so they
+        // can update local state for the affected session. We intentionally
+        // do NOT translate this to session.updated — that caused the
+        // sidebar to refetch the full list on every message, which the
+        // browser's per-origin concurrent-request cap then choked on.
+        // The full message content is in the event payload, so subscribers
+        // can update locally without a server roundtrip.
+        this.fireMessageAppended(
+          msg.sessionId,
+          msg.message.content,
+          msg.message.role,
+          msg.message.createdAt,
+        );
         // The user message is added optimistically in the client's send()
         // path, and echoed back here by the server. Don't dispatch the
         // echo as a streaming event — the hook would re-render it as an
@@ -481,6 +514,17 @@ export class ClaudebotClient {
   private emitError(error: StreamError): void {
     for (const handler of this.errorHandlers) {
       try { handler(error); } catch { /* best-effort */ }
+    }
+  }
+
+  private fireMessageAppended(
+    chatId: string,
+    content: string,
+    role: MessageRole,
+    createdAt: string,
+  ): void {
+    for (const handler of this.messageAppendedHandlers) {
+      try { handler(chatId, content, role, createdAt); } catch { /* best-effort */ }
     }
   }
 

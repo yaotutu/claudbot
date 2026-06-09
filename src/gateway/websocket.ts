@@ -88,7 +88,11 @@ export async function runUserTurn(
 
   const userMsg = await services.sessions.appendMessage(sessionId, { role: "user", content, metadata: {} });
   send({ type: "message.appended", sessionId, message: userMsg.messages[userMsg.messages.length - 1] });
-  send({ type: "session.updated", sessionId });
+  // No session.updated here: the client receives the user message via
+  // message.appended (which carries the full content) and updates the
+  // sidebar's local session state directly — a session.updated here would
+  // cause the WebUI to refetch the full session list, which is wasteful
+  // and was the root cause of the request storm.
 
   const runner = services.makeRunner("user_turn", sessionId);
   const resumeId = session.claudeSessionId || undefined;

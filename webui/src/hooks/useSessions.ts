@@ -61,28 +61,26 @@ export function useSessions(): {
   }, [refresh]);
 
   useEffect(() => {
-    // Debounce refresh on session.updated events. The server emits
-    // session.updated for every session.activate, every user message, and
-    // (via the WS client's translation of message.appended) every assistant
-    // message — a single turn can fire 2-3 events. Without debouncing,
-    // bursts blow past the browser's per-origin concurrent-request cap
-    // (Chrome ~6), surfacing as ERR_INSUFFICIENT_RESOURCES on the
-    // /api/sessions calls. 250ms is short enough that the sidebar still
-    // feels live; long enough to coalesce any single-turn burst.
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const trigger = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        void refresh();
-      }, 250);
-    };
-    const unsubscribe = client.onSessionUpdate(() => trigger());
-    return () => {
-      if (timer) clearTimeout(timer);
-      unsubscribe();
-    };
-  }, [client, refresh]);
+    // Subscribe to message.appended events and update the affected session's
+    // preview + updatedAt locally. The message content is already in the
+    // event payload, so no server roundtrip is needed — this is what
+    // previously caused the request storm (refresh() on every event).
+    const unsubscribe = client.onMessageAppended((sessionId, content) => {
+      const key = `websocket:${sessionId}`;
+      setSessions((prev) => {
+        const idx = prev.findIndex((s) => s.key === key);
+        if (idx === -1) return prev; // unknown session — ignore
+        const next = prev.slice();
+        next[idx] = {
+          ...next[idx],
+          preview: content.slice(0, 120),
+          updatedAt: new Date().toISOString(),
+        };
+        return next;
+      });
+    });
+    return unsubscribe;
+  }, [client]);
 
   const createChat = useCallback(async (workspaceScope?: WorkspaceScopePayload | null): Promise<string> => {
     const chatId = await client.newChat(5_000, workspaceScope);
