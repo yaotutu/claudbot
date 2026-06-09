@@ -28,7 +28,11 @@ export function makeWsHandlers(services: ServiceContainer) {
         send(ws, { type: "agent.error", message: "invalid JSON" });
         return;
       }
-      void handleClientMessage(ws, msg, services);
+      handleClientMessage(ws, msg, services).catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error("[ws] handleClientMessage failed:", detail);
+        try { send(ws, { type: "agent.error", message: `internal: ${detail}` }); } catch { /* ignore */ }
+      });
     },
     close(ws: ServerWebSocket<WsData>) {
       connections.delete(ws);

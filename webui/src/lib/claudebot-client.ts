@@ -263,6 +263,9 @@ export class ClaudebotClient {
         this.queueSend({ type: "session.activate", sessionId: session.id });
         // Also synthesize a ready event so any pending waiters settle.
         this.readyChatId = session.id;
+        // Set currentChatId so streaming events arriving before any explicit
+        // attach() (e.g. text_delta from an in-flight turn) still route.
+        this.currentChatId = session.id;
         resolve(session.id);
       } catch (e) {
         if (this.pendingNewChat) {
