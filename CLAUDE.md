@@ -69,8 +69,9 @@ WebUI ──HTTP/WS──▶ src/server.ts (Bun.serve)
                                    │
                                    ▼
                    src/runtime/services.ts (ServiceContainer)
-                       ├─ sessions      (SessionStore)
-                       ├─ runtimeState  (lastActiveSessionId)
+                       ├─ sessionStore  (ClaudebotSessionStore — SDK SessionStore adapter)
+                       ├─ sessions      (SessionStore — metadata-only, legacy)
+                       ├─ runtimeState  (lastActiveSessionId — SDK session UUID)
                        ├─ profile       (user.md / soul.md / memory.json)
                        ├─ memory        (MemoryStore)
                        ├─ scheduler     (SchedulerService)
@@ -95,13 +96,36 @@ Key boundaries:
 - **`src/utils/fs.ts`** — every JSON/text write goes through `writeJsonAtomic` / `writeTextAtomic`. The temp filename includes `pid.counter.timestamp.random` to prevent the millisecond-collision race that bit `setLastActiveSession` under concurrent writes.
 - **`src/agent/profile.ts`** — `user.md`, `soul.md`, `memory.json` use SHA256 version stamps. `updateFile` returns 409 (well, throws — the HTTP layer maps it) if `expectedVersion` is stale.
 
+## Session storage model
+
+Session messages are owned entirely by the Claude Agent SDK; the app layer does **not** store message content. The `ClaudebotSessionStore` adapter (`src/sessions/adapter.ts`) implements SDK's `SessionStore` interface and mirrors every transcript write from the SDK subprocess into claudebot's home.
+
+Layout under the home directory:
+
+```
+~/.claudebot/
+  config.json
+  sdk-config/                 # SDK's local working copy (CLAUDE_CONFIG_DIR)
+    projects/<dir-hash>/
+      <sdkSessionId>/
+        main.jsonl
+        subagents/...
+  sessions/                  # adapter mirror — what the app layer reads from
+    <sdkSessionId>/
+      main.jsonl
+      subagents/
+        agent-<id>.jsonl
+```
+
+`sessionId` is **the SDK's UUID** — there is no separate app-layer session id. `runtimeState.lastActiveSessionId` is a SDK UUID (or `null` if the user has never sent a message). The `ClaudebotSessionStore` is the only writer of the `.jsonl` files; the gateway reads them via `parseJsonlToUIMessages` (`src/sessions/jsonl-parser.ts`) when WebUI requests history.
+
 ## WebUI architecture
 
 The WebUI is a Vite + React 18 + Tailwind 3 + shadcn/ui app. The components under `webui/src/components/` (Sidebar, MessageBubble, the `thread/*` shell) are **copied from nanobot** and expect nanobot-shaped data (sessions with `key: "channel:chatId"`, an `InboundEvent` stream, etc.). Three adapter modules translate the claudebot wire shapes into those:
 
 - **`webui/src/lib/bootstrap.ts`** — `fetchBootstrap` calls `GET /webui/bootstrap` and synthesizes the nanobot `BootstrapResponse` shape (token is `""`, no auth).
 - **`webui/src/lib/api.ts`** — REST adapter. Maps claudebot's `{role, content, createdAt, metadata}` to nanobot's `UIMessage`. Stubs features claudebot doesn't have (skills, workspaces, settings, slash commands, file previews) with safe no-ops / 501 errors.
-- **`webui/src/lib/claudebot-client.ts`** — the WS client. Speaks claudebot's `WsClientMessage`/`WsServerMessage` and emits `InboundEvent` to the copied hooks. It tracks `currentChatId` locally and **fans `agent.*` events out by that**, not by `sessionId` on the wire — because the wire's `sessionId` is the *Claude* session UUID, not the claudebot session id. If routing looks wrong, check this fan-out first.
+- **`webui/src/lib/claudebot-client.ts`** — the WS client. Speaks claudebot's `WsClientMessage`/`WsServerMessage` and emits `InboundEvent` to the copied hooks. It tracks `currentChatId` locally and **fans `agent.*` events out by that**, not by `sessionId` on the wire — the wire's `sessionId` *is* the claudebot session id (a SDK UUID). If routing looks wrong, check this fan-out first.
 
 The big consumer is **`webui/src/hooks/useClaudebotStream.ts`** (~1100 lines). It receives `InboundEvent`s and renders user/assistant/system bubbles with a streaming cursor (`buffer.current`, `activeAssistantRef`, `closedAssistantStreamIdsRef`). On `send()` it **pre-pends a placeholder assistant bubble with `isStreaming: true`**, so `MessageBubble` renders the `TypingDots` indicator immediately and the user sees activity before the first delta lands. It also drops user-role `message.appended` echoes (the server echoes the user message back; the client adds it optimistically on send — re-dispatching would double-render it).
 
@@ -113,7 +137,7 @@ Two non-obvious things in the boot path (`webui/src/App.tsx`):
 ## Operational gotchas
 
 - **No auth.** The gateway binds `0.0.0.0` by default; the WebUI has no token, no login. This is intentional for MVP testing. If you need auth, the spec calls for `token`/`tokenIssueSecret` in config — not implemented yet.
-- **Scheduler is a stub executor.** `runScheduledTurn` in `src/runtime/services.ts` writes a synthetic `[schedule id] message` to the last active session instead of actually running a Claude turn. A real implementation would dispatch `ClaudeRunner.run()` against the same `queryFactory`. The plumbing is there; only the body is stubbed.
+- **Scheduler is a real executor.** `runScheduledTurn` in `src/runtime/services.ts` dispatches a real `ClaudeRunner.run()` call against the same `queryFactory` used for user turns, targeting the last active session. If there is no active session, the run is skipped with a log message.
 - **The webui `README.md` is stale.** It describes a Python/pip packaging flow that no longer applies (claudebot is Bun/TypeScript, not Python). The "just want to use the WebUI?" section is misleading. The accurate boot steps are the ones in this file's Commands section.
 - **`src/spikes/`** — diagnostic scripts from the SDK spike phase. Not part of the runtime; safe to delete if you need a cleanup.
 - **Live Claude SDK verification is blocked** in this environment (no working Anthropic auth for some endpoints). Mocked tests cover the runner, gateway, and stream hook paths. The `maybeChunk` chunker exists specifically to make the BigModel/glm-5.1 endpoint feel streaming; verify any change to it against a live call before shipping.
