@@ -18,6 +18,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 function fakeClient() {
   const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
+  const messageAppendedHandlers = new Set<(chatId: string, content: string, role: string, createdAt: string) => void>();
   return {
     status: "open" as const,
     defaultChatId: null as string | null,
@@ -31,6 +32,13 @@ function fakeClient() {
     },
     emitSessionUpdate: (chatId: string, scope?: string) => {
       for (const handler of sessionUpdateHandlers) handler(chatId, scope);
+    },
+    onMessageAppended: (handler: (chatId: string, content: string, role: string, createdAt: string) => void) => {
+      messageAppendedHandlers.add(handler);
+      return () => messageAppendedHandlers.delete(handler);
+    },
+    fireMessageAppended(chatId: string, content: string, role: string, createdAt: string) {
+      for (const handler of messageAppendedHandlers) handler(chatId, content, role, createdAt);
     },
     sendMessage: vi.fn(),
     newChat: vi.fn(),
@@ -118,9 +126,8 @@ describe("useSessions", () => {
     expect(result.current.sessions.map((s) => s.key)).toEqual(["websocket:chat-b"]);
   });
 
-  it("refreshes sessions when the websocket reports a session update", async () => {
-    vi.mocked(api.listSessions)
-      .mockResolvedValueOnce([
+  it("updates session preview locally on message.appended", async () => {
+    vi.mocked(api.listSessions).mockResolvedValueOnce([
       {
         key: "websocket:chat-a",
         channel: "websocket",
@@ -129,32 +136,25 @@ describe("useSessions", () => {
         updatedAt: "2026-04-16T10:00:00Z",
         preview: "",
       },
-      ])
-      .mockResolvedValueOnce([
-        {
-          key: "websocket:chat-a",
-          channel: "websocket",
-          chatId: "chat-a",
-          createdAt: "2026-04-16T10:00:00Z",
-          updatedAt: "2026-04-16T10:01:00Z",
-          title: "生成的小标题",
-          preview: "用户第一句话",
-        },
-      ]);
+    ]);
     const client = fakeClient();
 
     const { result } = renderHook(() => useSessions(), {
       wrapper: wrap(client),
     });
 
-    await waitFor(() => expect(result.current.sessions[0]?.title).toBeUndefined());
+    await waitFor(() => expect(result.current.sessions).toHaveLength(1));
+    expect(result.current.sessions[0]?.preview).toBe("");
 
+    // The hook subscribes to onMessageAppended. When a message arrives,
+    // the session's preview is updated locally without a server roundtrip.
     act(() => {
-      client.emitSessionUpdate("chat-a");
+      client.fireMessageAppended("chat-a", "用户第一句话", "assistant", "2026-04-16T10:01:00Z");
     });
 
-    await waitFor(() => expect(result.current.sessions[0]?.title).toBe("生成的小标题"));
-    expect(api.listSessions).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(result.current.sessions[0]?.preview).toBe("用户第一句话"));
+    // No extra listSessions call — purely local update.
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a newly created chat visible until the server session list catches up", async () => {
