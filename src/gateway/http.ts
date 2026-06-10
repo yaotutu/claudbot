@@ -28,12 +28,16 @@ export async function handleHttp(
       const summaries = await Promise.all(
         list.map(async (s) => {
           const info = await services.sdkSessions.info(s.sessionId);
+          const mainFile = Bun.file(join(services.paths.sessionsDir, s.sessionId, "main.jsonl"));
+          const messageCount = (await mainFile.exists())
+            ? (await mainFile.text()).split("\n").filter((l) => l.length > 0).length
+            : 0;
           return {
             id: s.sessionId,
             title: info?.customTitle ?? info?.summary ?? info?.firstPrompt ?? "(untitled)",
             preview: info?.firstPrompt ?? "",
             updatedAt: new Date(s.mtime).toISOString(),
-            messageCount: 0,
+            messageCount,
           };
         }),
       );

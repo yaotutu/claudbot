@@ -3,9 +3,15 @@ import { ensureDir, readJson, writeJsonAtomic } from "../utils/fs.ts";
 import { newId } from "../utils/id.ts";
 import type { SessionRecord } from "./types.ts";
 
-function now(): string {
-  return new Date().toISOString();
-}
+/**
+ * @deprecated Metadata-only legacy store. The SDK .jsonl transcript is the
+ * sole source of truth for message content; this class only persists
+ * non-message fields (id, title, preview, claudeSessionId, createdAt,
+ * updatedAt). It exists because the gateway still exports it via
+ * `ServiceContainer.sessions` and `tests/gateway.test.ts` spies on it.
+ * Delete it together with those two consumers when ready.
+ */
+const now = (): string => new Date().toISOString();
 
 export class SessionStore {
   constructor(private readonly dir: string) {}

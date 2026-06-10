@@ -5,6 +5,11 @@ import type { ServiceContainer } from "../runtime/services.ts";
 import type { WsClientMessage, WsServerMessage } from "./protocol.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
 
+// SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
+// long so the adapter mirror has a chance to flush before we ack the WebUI.
+// If SDK adds a flush() signal in the future, replace this with that.
+const MIRROR_FLUSH_SETTLE_MS = 50;
+
 export type WsData = {
   sessionId: string;
   services: ServiceContainer;
@@ -126,8 +131,8 @@ export async function runUserTurn(
   }
 
   // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
-  // beat to flush before we ack the WebUI (50ms is plenty for small batches).
-  await new Promise((r) => setTimeout(r, 50));
+  // beat to flush before we ack the WebUI.
+  await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
 
   const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
   const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
