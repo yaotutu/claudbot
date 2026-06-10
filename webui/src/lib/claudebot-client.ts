@@ -32,6 +32,7 @@ type MessageAppendedHandler = (
   role: MessageRole,
   createdAt: string,
 ) => void;
+type SessionRemapHandler = (oldChatId: string, newChatId: string) => void;
 
 interface PendingNewChat {
   resolve: (chatId: string) => void;
@@ -78,10 +79,13 @@ export class ClaudebotClient {
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private messageAppendedHandlers = new Set<MessageAppendedHandler>();
+  private sessionRemapHandlers = new Set<SessionRemapHandler>();
   private chatHandlers = new Map<string, Set<EventHandler>>();
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
   private static readonly PENDING_INBOUND_MAX = 2000;
   private knownChats = new Set<string>();
+  /** Chat IDs created by newChat() that haven't been remapped to a real SDK ID yet. */
+  private pendingChatIds = new Set<string>();
   private runStartedAtByChatId = new Map<string, number>();
   private goalStateByChatId = new Map<string, GoalStateWsPayload>();
   private pendingNewChat: PendingNewChat | null = null;
@@ -186,6 +190,18 @@ export class ClaudebotClient {
     };
   }
 
+  /**
+   * Subscribe to session remap events. Fired when the server assigns a
+   * real SDK session ID that replaces a local placeholder UUID (created
+   * by newChat). Subscribers should update their key mappings.
+   */
+  onSessionRemap(handler: SessionRemapHandler): Unsubscribe {
+    this.sessionRemapHandlers.add(handler);
+    return () => {
+      this.sessionRemapHandlers.delete(handler);
+    };
+  }
+
   getRunStartedAt(chatId: string): number | null {
     const v = this.runStartedAtByChatId.get(chatId);
     return v === undefined ? null : v;
@@ -261,6 +277,7 @@ export class ClaudebotClient {
   newChat(_timeoutMs: number = 5_000, _workspaceScope?: unknown): Promise<string> {
     const chatId = crypto.randomUUID();
     this.knownChats.add(chatId);
+    this.pendingChatIds.add(chatId);
     // Activate over WS so the server clears its lastActiveSession — the next
     // user message will create a fresh SDK session instead of resuming.
     this.queueSend({ type: "session.activate", sessionId: chatId });
@@ -327,9 +344,19 @@ export class ClaudebotClient {
   }
 
   private dispatchServerMessage(msg: WsServerMessage): void {
+    // Detect server-assigned session ID and remap from local placeholder.
+    // When the user creates a new chat, newChat() generates a local UUID.
+    // The SDK assigns its own session ID on the first message. This remap
+    // keeps the UI's routing consistent so the sidebar doesn't show two entries.
+    // Guard: only remap if currentChatId is still a pending placeholder —
+    // prevents stale events from an old session corrupting a brand-new chat.
+    const serverSid = ("sessionId" in msg) ? (msg as { sessionId?: string }).sessionId : undefined;
+    if (serverSid && this.currentChatId && serverSid !== this.currentChatId && this.pendingChatIds.has(this.currentChatId)) {
+      this.remapChatId(this.currentChatId, serverSid);
+    }
+
     // Use `currentChatId` (set by `attach`/`newChat`) as the routing key for
-    // streaming events. The wire's `sessionId` on agent.* frames can be stale
-    // (it tracks the last-seen SDK session, not necessarily the active one).
+    // streaming events. After remap, this is the real SDK session ID.
     const rid = this.currentChatId ?? "";
     switch (msg.type) {
       case "session.updated": {
@@ -496,6 +523,61 @@ export class ClaudebotClient {
   ): void {
     for (const handler of this.messageAppendedHandlers) {
       try { handler(chatId, content, role, createdAt); } catch { /* best-effort */ }
+    }
+  }
+
+  /**
+   * Remap all internal state from a local placeholder chatId to the real
+   * SDK-assigned session ID. Moves handlers, pending events, and notifies
+   * subscribers so the UI can update its key mappings.
+   */
+  private remapChatId(oldId: string, newId: string): void {
+    if (oldId === newId) return;
+    // Move chat handlers
+    const oldHandlers = this.chatHandlers.get(oldId);
+    if (oldHandlers) {
+      const existing = this.chatHandlers.get(newId);
+      if (existing) {
+        for (const h of oldHandlers) existing.add(h);
+      } else {
+        this.chatHandlers.set(newId, oldHandlers);
+      }
+      this.chatHandlers.delete(oldId);
+    }
+    // Move pending inbound
+    const oldPending = this.pendingInboundByChat.get(oldId);
+    if (oldPending && oldPending.length > 0) {
+      const newPending = this.pendingInboundByChat.get(newId);
+      if (newPending) {
+        newPending.push(...oldPending);
+      } else {
+        this.pendingInboundByChat.set(newId, oldPending);
+      }
+      this.pendingInboundByChat.delete(oldId);
+    }
+    // Update known chats
+    this.knownChats.delete(oldId);
+    this.knownChats.add(newId);
+    // Clear pending marker — this ID is now a real SDK session
+    this.pendingChatIds.delete(oldId);
+    // Update current/ready references
+    if (this.currentChatId === oldId) this.currentChatId = newId;
+    if (this.readyChatId === oldId) this.readyChatId = newId;
+    // Move run-started tracking
+    const runStarted = this.runStartedAtByChatId.get(oldId);
+    if (runStarted !== undefined) {
+      this.runStartedAtByChatId.set(newId, runStarted);
+      this.runStartedAtByChatId.delete(oldId);
+    }
+    // Move goal state
+    const goalState = this.goalStateByChatId.get(oldId);
+    if (goalState) {
+      this.goalStateByChatId.set(newId, goalState);
+      this.goalStateByChatId.delete(oldId);
+    }
+    // Notify subscribers
+    for (const handler of this.sessionRemapHandlers) {
+      try { handler(oldId, newId); } catch { /* ignore */ }
     }
   }
 

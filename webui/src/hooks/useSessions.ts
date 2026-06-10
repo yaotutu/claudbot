@@ -82,6 +82,28 @@ export function useSessions(): {
     return unsubscribe;
   }, [client]);
 
+  // When the server assigns a real SDK session ID (replacing the local
+  // placeholder from newChat), remap the session key so the sidebar
+  // doesn't show two entries for the same conversation.
+  useEffect(() => {
+    const unsubscribe = client.onSessionRemap((oldChatId, newChatId) => {
+      const oldKey = `websocket:${oldChatId}`;
+      const newKey = `websocket:${newChatId}`;
+      setSessions((prev) => {
+        const idx = prev.findIndex((s) => s.key === oldKey);
+        if (idx === -1) return prev;
+        const next = prev.slice();
+        next[idx] = { ...next[idx], key: newKey, chatId: newChatId };
+        return next;
+      });
+      // The real SDK session is now known to the server — drop optimistic flag
+      if (optimisticKeysRef.current.has(oldKey)) {
+        optimisticKeysRef.current.delete(oldKey);
+      }
+    });
+    return unsubscribe;
+  }, [client]);
+
   const createChat = useCallback(async (workspaceScope?: WorkspaceScopePayload | null): Promise<string> => {
     const chatId = await client.newChat(5_000, workspaceScope);
     const key = `websocket:${chatId}`;

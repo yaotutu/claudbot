@@ -164,6 +164,15 @@ export async function runUserTurn(
     ws.data.sessionId = lastSessionId;
   }
 
+  // First message in a new session — set the title from the user's message
+  // so the sidebar shows a meaningful name immediately and it persists across
+  // page refreshes.
+  if (!sdkSessionId && lastSessionId) {
+    try {
+      await services.sdkSessions.rename(lastSessionId, content.slice(0, 60));
+    } catch { /* non-critical */ }
+  }
+
   // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
   // beat to flush before we ack the WebUI.
   await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
