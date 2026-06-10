@@ -119,6 +119,12 @@ Layout under the home directory:
 
 `sessionId` is **the SDK's UUID** — there is no separate app-layer session id. `runtimeState.lastActiveSessionId` is a SDK UUID (or `null` if the user has never sent a message). The `ClaudebotSessionStore` is the only writer of the `.jsonl` files; the gateway reads them via `parseJsonlToUIMessages` (`src/sessions/jsonl-parser.ts`) when WebUI requests history.
 
+Notes on the implementation:
+
+- **Message count for the session list** (`/webui/bootstrap`) is computed by counting non-empty lines in `main.jsonl`. Don't read the file into memory; `Bun.file(...).text().split("\n")` is fine for current sizes but revisit if session transcripts grow large.
+- **`MIRROR_FLUSH_SETTLE_MS = 50`** in `src/gateway/websocket.ts` is a settle delay between `turn_done` and the WS ack, so the adapter mirror has time to flush under `sessionStoreFlush: 'batched'`. If the SDK exposes a flush signal, replace this with that.
+- **`SessionStore` class (`src/sessions/store.ts`) is `@deprecated`.** It persists only metadata (`id`, `title`, `preview`, `claudeSessionId`, timestamps) and is kept around because `ServiceContainer.sessions` still exports it and `tests/gateway.test.ts` spies on it. Delete it together with those two consumers when ready.
+
 ## WebUI architecture
 
 The WebUI is a Vite + React 18 + Tailwind 3 + shadcn/ui app. The components under `webui/src/components/` (Sidebar, MessageBubble, the `thread/*` shell) are **copied from nanobot** and expect nanobot-shaped data (sessions with `key: "channel:chatId"`, an `InboundEvent` stream, etc.). Three adapter modules translate the claudebot wire shapes into those:
