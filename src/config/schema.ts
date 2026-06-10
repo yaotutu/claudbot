@@ -18,6 +18,10 @@ const ClaudeCodeSchema = z.object({
   maxTurns: z.number().int().min(1).default(200),
 });
 
+const SchedulerSchema = z.object({
+  tickIntervalMs: z.number().int().min(1000).default(30_000),
+}).default(() => ({ tickIntervalMs: 30_000 }));
+
 const ToolPermissionsSchema = z.object({
   default: ToolPolicySchema.default("allow"),
   overrides: z.record(z.string(), ToolPolicySchema).default({}),
@@ -39,6 +43,7 @@ export const RuntimeConfigSchema = z.object({
     maxTurns: 200,
   }),
   tools: ToolsSchema.default({ permissions: { default: "allow", overrides: {} } }),
+  scheduler: SchedulerSchema,
 });
 
 export type RuntimeConfigInput = z.input<typeof RuntimeConfigSchema>;

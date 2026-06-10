@@ -6,13 +6,38 @@ import { handleHttp } from "./gateway/http.ts";
 import { makeWsHandlers, type WsData } from "./gateway/websocket.ts";
 import { formatConfigSource, loadConfig } from "./config/loader.ts";
 import { runtimePaths } from "./config/paths.ts";
+import { appendScheduleResult } from "./scheduler/notify.ts";
 
 const loaded = await loadConfig();
 const config = loaded.config;
 const paths = runtimePaths(config);
 const services = await buildServices({ loaded, paths });
 
+// Start the scheduler cron loop.
+services.trigger.start(config.scheduler.tickIntervalMs);
+
 const handlers = makeWsHandlers(services);
+
+// Wire the schedule notifier to real delivery:
+// 1. Append result to last active session's .jsonl (fallback inbox)
+// 2. Broadcast message.appended to all WS connections (reuse existing protocol)
+services.notifier.deliver = async (payload) => {
+  const state = await services.runtimeState.get();
+  const targetId = state.lastActiveSessionId;
+  if (!targetId) return; // no session to deliver to
+  await appendScheduleResult(services.paths.sessionsDir, targetId, payload);
+  handlers.broadcast({
+    type: "message.appended",
+    sessionId: targetId,
+    message: {
+      id: `sched-${payload.scheduleId}-${Date.now()}`,
+      role: "assistant",
+      content: `[定时任务 ${payload.scheduleName}] ${payload.result}`,
+      createdAt: new Date().toISOString(),
+      metadata: { source: "schedule", scheduleId: payload.scheduleId },
+    },
+  });
+};
 
 // Static webui directory (built by `cd webui && bun run build`).
 // Resolved relative to this file so it works in dev and after bundling.
@@ -56,4 +81,16 @@ console.log(`  model:   ${config.claudeCode.model}`);
 if (loaded.source.kind === "defaults") {
   console.warn(`  ⚠️  No config file found. Set CLAUDEBOT_CONFIG or create ${config.home}/config.json to customize.`);
 }
+
+// Graceful shutdown — stop scheduler and close server.
+process.on("SIGINT", () => {
+  services.trigger.stop();
+  server.stop();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  services.trigger.stop();
+  server.stop();
+  process.exit(0);
+});
 

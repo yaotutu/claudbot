@@ -44,6 +44,13 @@ export function makeWsHandlers(services: ServiceContainer) {
       connections.delete(ws);
     },
     connections,
+    /** Broadcast a message to all connected WebSocket clients. */
+    broadcast(msg: WsServerMessage) {
+      const raw = JSON.stringify(msg);
+      for (const c of connections) {
+        try { c.send(raw); } catch { /* socket may be closed */ }
+      }
+    },
   };
 }
 

@@ -14,6 +14,7 @@ import { MemoryStore } from "../memory/store.ts";
 import { SchedulerStore } from "../scheduler/store.ts";
 import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.ts";
 import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
+import { createNoopNotifier, type ScheduleNotifier } from "../scheduler/notify.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
@@ -40,6 +41,7 @@ export type ServiceContainer = {
   memory: MemoryStore;
   schedulerStore: SchedulerStore;
   storeOps: SchedulerStoreOps;
+  notifier: ScheduleNotifier;
   trigger: SchedulerTrigger;
   toolRegistry: ToolRegistry;
   queryFactory: QueryFactory;
@@ -95,6 +97,9 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   // 1. CRUD layer (no executor dependency)
   const storeOps = createStoreOps(schedulerStore);
 
+  // 1b. Notification — starts as no-op; server.ts wires real delivery after WS handlers are ready.
+  const notifier = createNoopNotifier();
+
   // 2. Lazy trigger reference — populated after queryFactory is built.
   //    Only `schedule_run_now` tool needs the trigger; CRUD tools use storeOps directly.
   let triggerRef: SchedulerTrigger | undefined;
@@ -132,7 +137,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
 
   // 6. Trigger (uses store + executor that closes over queryFactory — no cycle)
   triggerRef = createSchedulerTrigger(schedulerStore, async (sched, run) => {
-    return runScheduledTurn(sched, run, config, toolRegistry, paths, queryFactory);
+    return runScheduledTurn(sched, run, config, toolRegistry, paths, queryFactory, notifier);
   });
 
   const makeRunner = (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string): ClaudeRunner => {
@@ -163,6 +168,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     memory,
     schedulerStore,
     storeOps,
+    notifier,
     trigger: triggerRef,
     toolRegistry,
     queryFactory,
@@ -188,23 +194,18 @@ function buildToolRegistry(
 }
 
 async function runScheduledTurn(
-  sched: { id: string; message: string; timezone: string },
+  sched: { id: string; name: string; message: string; timezone: string },
   run: { id: string; startedAt: string },
   config: RuntimeConfig,
   toolRegistry: ToolRegistry,
   paths: RuntimePaths,
   queryFactory: QueryFactory,
+  notifier: ScheduleNotifier,
 ): Promise<string> {
-  // Dispatch a real turn against the last-active session. The runner
-  // streams via the same queryFactory used for user turns; the SDK
-  // session store adapter folds the result into the session's .jsonl
-  // automatically (the runner passes `resumeSessionId: target`).
-  const state = await readRuntimeStateOrEmpty(paths.runtimeStateFile);
-  const target = state.lastActiveSessionId;
-  if (!target) {
-    return `[schedule ${sched.id}] skipped: no active session`;
-  }
-  const prompt = `[schedule ${sched.id}] ${sched.message}`;
+  // Create a new one-off session — do NOT resume any existing session.
+  // The scheduled task executes independently; the result is delivered
+  // to the user via notifier.deliver (JSONL fallback + WS broadcast).
+  const prompt = `[定时任务 ${sched.name}] ${sched.message}`;
   const runner = new ClaudeRunner(
     {
       config,
@@ -214,7 +215,7 @@ async function runScheduledTurn(
         home: paths.home,
         workspacePath: paths.workspace,
         timezone: sched.timezone,
-        sessionId: target,
+        sessionId: `sched-${run.id}`,
         scheduleRunId: run.id,
         userFile: paths.userFile,
         soulFile: paths.soulFile,
@@ -223,11 +224,23 @@ async function runScheduledTurn(
     queryFactory,
   );
   let result = "";
-  for await (const ev of runner.run({ prompt, resumeSessionId: target })) {
+  for await (const ev of runner.run({ prompt })) {
     if (ev.type === "text_delta") result += ev.text;
     if (ev.type === "turn_done") result = ev.result || result;
   }
-  return result || `[schedule ${sched.id}] (no output)`;
+  const finalResult = result || `[定时任务 ${sched.name}] (no output)`;
+
+  // Deliver result — notifier is a no-op until server.ts wires it.
+  await notifier.deliver({
+    scheduleId: sched.id,
+    scheduleName: sched.name,
+    status: "succeeded",
+    result: finalResult,
+  }).catch((err) => {
+    console.error("[scheduler] notifier.deliver failed:", err instanceof Error ? err.message : err);
+  });
+
+  return finalResult;
 }
 
 async function readRuntimeStateOrEmpty(path: string): Promise<{ lastActiveSessionId: string }> {

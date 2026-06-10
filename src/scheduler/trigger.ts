@@ -1,5 +1,5 @@
-// Schedule trigger — execution layer (runNow, tick).
-// Depends on SchedulerStore + executor callback.
+// Schedule trigger — execution layer + cron loop.
+// Owns the timer that periodically scans for due schedules and executes them in parallel.
 // Created after queryFactory is available, breaking the circular dependency.
 
 import { newId } from "../utils/id.ts";
@@ -13,22 +13,37 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Execute a single schedule independently.
+ * Reads the store fresh, updates only its own schedule record, writes back.
+ * Safe to call in parallel for different schedules.
+ */
 async function runSchedule(
-  schedule: ScheduleRecord,
-  schedules: ScheduleRecord[],
+  scheduleId: string,
   store: SchedulerStore,
   executor: ScheduleExecutor,
 ): Promise<ScheduleRunRecord> {
   const start = now();
   const run: ScheduleRunRecord = {
     id: newId("run"),
-    scheduleId: schedule.id,
+    scheduleId,
     startedAt: start,
     finishedAt: null,
     status: "running",
     result: "",
     error: "",
   };
+
+  // Read fresh from store
+  const schedules = await store.listSchedules();
+  const schedule = schedules.find((s) => s.id === scheduleId);
+  if (!schedule) {
+    run.status = "failed";
+    run.error = `schedule not found: ${scheduleId}`;
+    run.finishedAt = now();
+    await store.appendRun(run);
+    return run;
+  }
 
   if (schedule.state.running) {
     run.status = "skipped_running";
@@ -37,9 +52,11 @@ async function runSchedule(
     return run;
   }
 
+  // Lock
   schedule.state.running = true;
   await store.saveSchedules(schedules);
   await store.appendRun(run);
+
   try {
     run.result = await executor(schedule, run);
     run.status = "succeeded";
@@ -64,22 +81,48 @@ async function runSchedule(
 }
 
 export function createSchedulerTrigger(store: SchedulerStore, executor: ScheduleExecutor) {
+  let intervalId: ReturnType<typeof setInterval> | undefined;
+
   return {
+    /** Run a specific schedule by id immediately. */
     async runNow(id: string): Promise<ScheduleRunRecord> {
-      const schedules = await store.listSchedules();
-      const schedule = schedules.find((item) => item.id === id);
-      if (!schedule) throw new Error(`schedule not found: ${id}`);
-      return runSchedule(schedule, schedules, store, executor);
+      return runSchedule(id, store, executor);
     },
 
+    /** Scan for all due schedules and execute them in parallel. */
     async tick(at: Date = new Date()): Promise<ScheduleRunRecord[]> {
       const schedules = await store.listSchedules();
-      const due = schedules.filter((s) => s.enabled && new Date(s.state.nextRunAt).getTime() <= at.getTime());
-      const runs: ScheduleRunRecord[] = [];
-      for (const schedule of due) {
-        runs.push(await runSchedule(schedule, schedules, store, executor));
+      const due = schedules.filter(
+        (s) => s.enabled && new Date(s.state.nextRunAt).getTime() <= at.getTime(),
+      );
+      if (due.length === 0) return [];
+
+      const results = await Promise.allSettled(
+        due.map((s) => runSchedule(s.id, store, executor)),
+      );
+      return results
+        .filter((r): r is PromiseFulfilledResult<ScheduleRunRecord> => r.status === "fulfilled")
+        .map((r) => r.value);
+    },
+
+    /** Start the cron loop. Periodically calls tick(). */
+    start(intervalMs = 30_000): void {
+      if (intervalId !== undefined) return; // already running
+      intervalId = setInterval(async () => {
+        try {
+          await this.tick();
+        } catch (err) {
+          console.error("[scheduler] tick error:", err instanceof Error ? err.message : err);
+        }
+      }, intervalMs);
+    },
+
+    /** Stop the cron loop. */
+    stop(): void {
+      if (intervalId !== undefined) {
+        clearInterval(intervalId);
+        intervalId = undefined;
       }
-      return runs;
     },
   };
 }

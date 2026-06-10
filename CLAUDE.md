@@ -74,7 +74,9 @@ WebUI ──HTTP/WS──▶ src/server.ts (Bun.serve)
                        ├─ runtimeState  (lastActiveSessionId — SDK session UUID)
                        ├─ profile       (user.md / soul.md / memory.json)
                        ├─ memory        (MemoryStore)
-                       ├─ scheduler     (SchedulerService)
+                       ├─ schedulerStore + storeOps  (CRUD)
+                       ├─ notifier      (ScheduleNotifier — delivery bridge)
+                       ├─ trigger       (SchedulerTrigger — cron loop + execution)
                        ├─ toolRegistry  (ToolRegistry)
                        └─ makeRunner()  (ClaudeRunner)
                                           │
@@ -89,7 +91,7 @@ WebUI ──HTTP/WS──▶ src/server.ts (Bun.serve)
 
 Key boundaries:
 
-- **`src/runtime/services.ts`** — wires a `ServiceContainer` per process. There is a real cycle between `SchedulerService` and `ToolRegistry` (the registry holds the scheduler; the scheduler's executor closes over the queryFactory, which closes over the registry). It is broken with a placeholder scheduler that is swapped to the real one after wiring. If you touch this file, preserve the swap.
+- **`src/runtime/services.ts`** — wires a `ServiceContainer` per process. Assembly is linear (no cycles): Store → StoreOps → Registry → queryFactory → Trigger. The trigger's executor needs `queryFactory`, which needs the registry, which only needs `storeOps` + a lazy `getTrigger()` getter. The `ScheduleNotifier` starts as a no-op and is wired to real delivery (WS broadcast + JSONL fallback) in `server.ts` after WS handlers are created.
 - **`src/agent/runner.ts`** — thin wrapper over the SDK's `query()`. Normalizes SDK messages into the gateway wire events (`text_delta`, `thinking_delta`, `tool_start`, `tool_result`, `status`, `turn_done`, `error`). Critically, non-Anthropic endpoints (e.g. BigModel's `glm-5.1`) return the whole assistant content in one block — `maybeChunk` slices `text_delta` and `thinking_delta` into ~6-char chunks with a 12ms pause so the UI streams instead of flashing the final answer. If streaming looks broken, check this first.
 - **`src/gateway/websocket.ts`** — incoming `chat.user_message` triggers `runUserTurn`, which forwards every `NormalizedEvent` to the client via `forward()`. The WebSocket handler uses an **explicit `.catch`** on `handleClientMessage` (not `void …`) — Bun treats unhandled rejections as fatal. Do not refactor to `void` here.
 - **`src/tools/sdk-adapter.ts`** — wraps the `ToolRegistry` in `createSdkMcpServer` (in-process MCP). Tools are validated, authorized, audited, then executed. Do not introduce a separate subprocess MCP server.
@@ -143,7 +145,7 @@ Two non-obvious things in the boot path (`webui/src/App.tsx`):
 ## Operational gotchas
 
 - **No auth.** The gateway binds `0.0.0.0` by default; the WebUI has no token, no login. This is intentional for MVP testing. If you need auth, the spec calls for `token`/`tokenIssueSecret` in config — not implemented yet.
-- **Scheduler is a real executor.** `runScheduledTurn` in `src/runtime/services.ts` dispatches a real `ClaudeRunner.run()` call against the same `queryFactory` used for user turns, targeting the last active session. If there is no active session, the run is skipped with a log message.
+- **Scheduler is a real executor.** `runScheduledTurn` in `src/runtime/services.ts` dispatches a real `ClaudeRunner.run()` call in a **new one-off session** (no `resumeSessionId`). After execution, the result is delivered via `ScheduleNotifier`: written to the last active session's `.jsonl` (fallback inbox) and broadcast as `message.appended` to all connected WebSocket clients. If there is no active session, the result is only stored in the run record.
 - **The webui `README.md` is stale.** It describes a Python/pip packaging flow that no longer applies (claudebot is Bun/TypeScript, not Python). The "just want to use the WebUI?" section is misleading. The accurate boot steps are the ones in this file's Commands section.
 - **`src/spikes/`** — diagnostic scripts from the SDK spike phase. Not part of the runtime; safe to delete if you need a cleanup.
 - **Live Claude SDK verification is blocked** in this environment (no working Anthropic auth for some endpoints). Mocked tests cover the runner, gateway, and stream hook paths. The `maybeChunk` chunker exists specifically to make the BigModel/glm-5.1 endpoint feel streaming; verify any change to it against a live call before shipping.

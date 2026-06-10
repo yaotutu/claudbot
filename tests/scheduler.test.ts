@@ -102,10 +102,104 @@ describe("scheduler trigger (execution)", () => {
     expect(new Date(after.state.nextRunAt).getTime()).toBeGreaterThan(Date.now() - 60_000);
     expect(after.state.runCount).toBe(1);
   });
+
+  test("tick executes multiple due schedules in parallel", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const executionOrder: string[] = [];
+    const trigger = createSchedulerTrigger(store, async (sched) => {
+      executionOrder.push(`start:${sched.id}`);
+      // Simulate work — schedule A takes longer than schedule B
+      await new Promise((r) => setTimeout(r, sched.name === "slow" ? 100 : 10));
+      executionOrder.push(`end:${sched.id}`);
+      return "ok";
+    });
+    // Create two schedules
+    const schedA = await storeOps.create({ name: "slow", cronExpr: "* * * * *", timezone: "UTC", message: "a" });
+    const schedB = await storeOps.create({ name: "fast", cronExpr: "* * * * *", timezone: "UTC", message: "b" });
+    // Force both to be due
+    const schedules = await store.listSchedules();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    for (const s of schedules) s.state.nextRunAt = past;
+    await store.saveSchedules(schedules);
+
+    await trigger.tick(new Date());
+    // Both should have completed
+    expect(executionOrder).toContain(`start:${schedA.id}`);
+    expect(executionOrder).toContain(`start:${schedB.id}`);
+    expect(executionOrder).toContain(`end:${schedA.id}`);
+    expect(executionOrder).toContain(`end:${schedB.id}`);
+    // B (fast) should finish before A (slow) — evidence of parallel execution
+    const endB = executionOrder.indexOf(`end:${schedB.id}`);
+    const endA = executionOrder.indexOf(`end:${schedA.id}`);
+    expect(endB).toBeLessThan(endA);
+  });
+});
+
+describe("scheduler trigger (start/stop)", () => {
+  test("start triggers periodic ticks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    let tickCount = 0;
+    const trigger = createSchedulerTrigger(store, async () => { tickCount++; return "ok"; });
+    // Create a schedule that's due now
+    const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
+    const schedules = await store.listSchedules();
+    schedules[0].state.nextRunAt = new Date(Date.now() - 60_000).toISOString();
+    await store.saveSchedules(schedules);
+
+    trigger.start(200); // 200ms interval for fast test
+    await new Promise((r) => setTimeout(r, 500));
+    trigger.stop();
+    expect(tickCount).toBeGreaterThan(0);
+  });
+
+  test("stop prevents further ticks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    let tickCount = 0;
+    const trigger = createSchedulerTrigger(store, async () => { tickCount++; return "ok"; });
+    trigger.start(100);
+    await new Promise((r) => setTimeout(r, 250));
+    trigger.stop();
+    const countAfterStop = tickCount;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(tickCount).toBe(countAfterStop);
+  });
+
+  test("tick error does not break the loop", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    let callCount = 0;
+    const trigger = createSchedulerTrigger(store, async () => {
+      callCount++;
+      if (callCount === 1) throw new Error("transient");
+      return "ok";
+    });
+    const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
+    // Force schedule due, and keep it due after each run by resetting nextRunAt
+    const forceDue = async () => {
+      const schedules = await store.listSchedules();
+      const s = schedules.find((x) => x.id === schedule.id);
+      if (s) { s.state.nextRunAt = new Date(Date.now() - 60_000).toISOString(); await store.saveSchedules(schedules); }
+    };
+    await forceDue();
+
+    trigger.start(150);
+    // After first tick (which fails), reset nextRunAt so next tick finds it due again
+    await new Promise((r) => setTimeout(r, 200));
+    await forceDue();
+    await new Promise((r) => setTimeout(r, 300));
+    trigger.stop();
+    // First executor call threw, but the loop continued and second call succeeded
+    expect(callCount).toBeGreaterThanOrEqual(2);
+  });
 });
 
 // These exercise the real `runScheduledTurn` wired into the service container.
-// We use a recording QueryFactory so we can assert the runner was actually dispatched.
 describe("runScheduledTurn (wired into services)", () => {
   function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
     const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
@@ -116,9 +210,9 @@ describe("runScheduledTurn (wired into services)", () => {
     return Object.assign(factory, { calls: calls as Array<{ prompt: string; resumeSessionId?: string }> });
   }
 
-  test("dispatches runner.run when there is an active session", async () => {
-    const init = { type: "system", subtype: "init", session_id: "sess-1" } as SdkMessage;
-    const result = { type: "result", session_id: "sess-1", result: "scheduled output", is_error: false } as SdkMessage;
+  test("creates new session (no resumeSessionId) and calls notifier", async () => {
+    const init = { type: "system", subtype: "init", session_id: "sched-new-1" } as SdkMessage;
+    const result = { type: "result", session_id: "sched-new-1", result: "hello from schedule", is_error: false } as SdkMessage;
     const factory = makeRecordingQueryFactory([init, result]);
 
     const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-rt-"));
@@ -126,35 +220,80 @@ describe("runScheduledTurn (wired into services)", () => {
     const paths = runtimePaths(config);
     const services = await buildServices({ config, paths, queryFactory: factory });
 
-    // Seed the active session so runScheduledTurn has a target.
-    await services.runtimeState.setLastActiveSession("sess-1", "user_open");
+    // Track notifier calls
+    const delivered: Array<Record<string, unknown>> = [];
+    services.notifier.deliver = async (payload) => { delivered.push(payload as Record<string, unknown>); };
 
-    const sched = await services.storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "tick" });
+    const sched = await services.storeOps.create({ name: "greeting", cronExpr: "* * * * *", timezone: "UTC", message: "say hello" });
     const run = await services.trigger.runNow(sched.id);
 
     expect(run.status).toBe("succeeded");
-    expect(run.result).toBe("scheduled output");
-    // The runner was invoked once with a prompt tagged with the schedule id.
+    expect(run.result).toBe("hello from schedule");
+    // Should NOT pass resumeSessionId — one-off session
     expect(factory.calls.length).toBe(1);
-    expect(factory.calls[0].prompt).toContain(sched.id);
-    expect(factory.calls[0].prompt).toContain("tick");
+    expect(factory.calls[0].resumeSessionId).toBeUndefined();
+    // Prompt should contain schedule name and message
+    expect(factory.calls[0].prompt).toContain("greeting");
+    expect(factory.calls[0].prompt).toContain("say hello");
+    // Notifier should have been called
+    expect(delivered.length).toBe(1);
+    expect(delivered[0].scheduleId).toBe(sched.id);
+    expect(delivered[0].scheduleName).toBe("greeting");
+    expect(delivered[0].status).toBe("succeeded");
+    expect(delivered[0].result).toBe("hello from schedule");
   });
 
-  test("skips when there is no active session", async () => {
-    const factory = makeRecordingQueryFactory([]);
+  test("always executes even without an active session", async () => {
+    const init = { type: "system", subtype: "init", session_id: "sched-fresh" } as SdkMessage;
+    const result = { type: "result", session_id: "sched-fresh", result: "done", is_error: false } as SdkMessage;
+    const factory = makeRecordingQueryFactory([init, result]);
 
     const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-rt-"));
     const config = resolveRuntimeConfig({ home: dir }, {});
     const paths = runtimePaths(config);
     const services = await buildServices({ config, paths, queryFactory: factory });
+    // No lastActiveSessionId set
 
-    // No lastActiveSessionId is set.
     const sched = await services.storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "tick" });
     const run = await services.trigger.runNow(sched.id);
 
+    // Should still execute (not skip)
     expect(run.status).toBe("succeeded");
-    expect(run.result).toContain("skipped: no active session");
-    // The runner was NOT invoked — there's no target to resume.
-    expect(factory.calls.length).toBe(0);
+    expect(run.result).toBe("done");
+    expect(factory.calls.length).toBe(1);
+  });
+});
+
+describe("appendScheduleResult + JSONL parser", () => {
+  test("appended result is parseable by parseJsonlToUIMessages", async () => {
+    const { appendScheduleResult } = await import("../src/scheduler/notify.ts");
+    const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-jsonl-"));
+    const sessionId = "test-session-1";
+    const sessionDir = join(dir, sessionId);
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(sessionDir, { recursive: true });
+
+    // Write a user message first so there's existing content
+    const { appendFile } = await import("node:fs/promises");
+    const userEntry = { type: "user", uuid: "msg-1", timestamp: new Date().toISOString(), message: { role: "user", content: "hello" } };
+    await appendFile(join(sessionDir, "main.jsonl"), JSON.stringify(userEntry) + "\n", "utf8");
+
+    // Append schedule result
+    await appendScheduleResult(dir, sessionId, {
+      scheduleId: "sch_test",
+      scheduleName: "test task",
+      status: "succeeded",
+      result: "task completed successfully",
+    });
+
+    // Parse and verify
+    const messages = await parseJsonlToUIMessages(join(sessionDir, "main.jsonl"));
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe("user");
+    expect(messages[1].role).toBe("assistant");
+    expect(messages[1].content).toContain("定时任务 test task");
+    expect(messages[1].content).toContain("task completed successfully");
   });
 });

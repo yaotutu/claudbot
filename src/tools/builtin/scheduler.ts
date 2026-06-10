@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import type { ToolContext, ToolSource } from "../types.ts";
 import type { ToolRegistry } from "../registry.ts";
 import type { SchedulerStoreOps } from "../../scheduler/store-ops.ts";
 import type { SchedulerTrigger } from "../../scheduler/trigger.ts";
@@ -20,7 +21,12 @@ export function registerSchedulerTools(
       timezone: TimezoneSchema,
       message: z.string().min(1),
     }),
-    execute: async (input) => storeOps.create(input),
+    execute: async (input, ctx) => {
+      if ((ctx as ToolContext).source === "schedule_turn" as ToolSource) {
+        throw new Error("不允许在定时任务执行中创建新的定时任务");
+      }
+      return storeOps.create(input);
+    },
   });
 
   registry.register({
