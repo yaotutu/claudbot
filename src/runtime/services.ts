@@ -3,6 +3,7 @@
 // Assembly order is linear — no circular dependencies:
 //   Store → StoreOps → Registry → queryFactory → Trigger
 
+import { join } from "node:path";
 import type { RuntimeConfig } from "../config/schema.ts";
 import { loadConfig, type LoadedConfig } from "../config/loader.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
@@ -203,8 +204,9 @@ async function runScheduledTurn(
   notifier: ScheduleNotifier,
 ): Promise<string> {
   // Create a new one-off session — do NOT resume any existing session.
-  // The scheduled task executes independently; the result is delivered
-  // to the user via notifier.deliver (JSONL fallback + WS broadcast).
+  // The scheduled task executes in the background; the result is delivered
+  // to the user via notifier.deliver. The execution session is cleaned up
+  // after completion so it never appears in the sidebar.
   const prompt = `[定时任务 ${sched.name}] ${sched.message}`;
   const runner = new ClaudeRunner(
     {
@@ -224,9 +226,13 @@ async function runScheduledTurn(
     queryFactory,
   );
   let result = "";
+  let execSessionId: string | undefined;
   for await (const ev of runner.run({ prompt })) {
     if (ev.type === "text_delta") result += ev.text;
-    if (ev.type === "turn_done") result = ev.result || result;
+    if (ev.type === "turn_done") {
+      result = ev.result || result;
+      if (ev.sessionId) execSessionId = ev.sessionId;
+    }
   }
   const finalResult = result || `[定时任务 ${sched.name}] (no output)`;
 
@@ -239,6 +245,18 @@ async function runScheduledTurn(
   }).catch((err) => {
     console.error("[scheduler] notifier.deliver failed:", err instanceof Error ? err.message : err);
   });
+
+  // Clean up the execution session — it's a background session that
+  // should never appear in the user's sidebar.
+  if (execSessionId) {
+    const sessionDir = join(paths.sessionsDir, execSessionId);
+    try {
+      const { rm } = await import("node:fs/promises");
+      await rm(sessionDir, { recursive: true, force: true });
+    } catch {
+      // Non-critical — best effort cleanup
+    }
+  }
 
   return finalResult;
 }
