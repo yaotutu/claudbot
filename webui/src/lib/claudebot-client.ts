@@ -382,6 +382,12 @@ export class ClaudebotClient {
         // echo as a streaming event — the hook would re-render it as an
         // assistant bubble.
         if (msg.message.role === "user") return;
+        // Regular assistant responses are already delivered via streaming
+        // text_delta events — dispatching them again here as "progress"
+        // causes duplicate content and spurious "Working" trace rows.
+        // Only dispatch non-streaming sources (e.g. scheduled task results
+        // identified by metadata.source).
+        if (!msg.message.metadata?.source) return;
         const inbound: InboundEvent = {
           event: "message",
           chat_id: msg.sessionId,

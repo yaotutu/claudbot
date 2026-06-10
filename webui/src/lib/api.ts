@@ -39,7 +39,7 @@ async function request<T>(
   timeoutMs: number = 0,
 ): Promise<T> {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const t = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const res = await fetch(url, {
       ...(init ?? {}),
@@ -63,7 +63,7 @@ async function request<T>(
     }
     return (await res.json()) as T;
   } finally {
-    clearTimeout(t);
+    if (t) clearTimeout(t);
   }
 }
 

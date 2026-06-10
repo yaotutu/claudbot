@@ -83,12 +83,12 @@ describe("ClaudebotClient", () => {
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-a",
-      message: { id: "1", role: "assistant", content: "hi", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "1", role: "assistant", content: "hi", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-b",
-      message: { id: "2", role: "assistant", content: "no", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "2", role: "assistant", content: "no", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0][0]).toMatchObject({
@@ -133,12 +133,12 @@ describe("ClaudebotClient", () => {
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-queue",
-      message: { id: "1", role: "assistant", content: "a", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "1", role: "assistant", content: "a", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-queue",
-      message: { id: "2", role: "assistant", content: "b", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "2", role: "assistant", content: "b", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     const handler = vi.fn();
     client.onChat("chat-queue", handler);
@@ -149,7 +149,7 @@ describe("ClaudebotClient", () => {
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-queue",
-      message: { id: "3", role: "assistant", content: "c", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "3", role: "assistant", content: "c", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     expect(handler).toHaveBeenCalledTimes(3);
   });
@@ -276,7 +276,7 @@ describe("ClaudebotClient", () => {
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-rejoin",
-      message: { id: "1", role: "assistant", content: "live", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "1", role: "assistant", content: "live", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     expect(h1).toHaveBeenCalledTimes(1);
     unsub();
@@ -284,7 +284,7 @@ describe("ClaudebotClient", () => {
     lastSocket().fakeMessage({
       type: "message.appended",
       sessionId: "chat-rejoin",
-      message: { id: "2", role: "assistant", content: "queued", createdAt: "2026-01-01T00:00:00Z", metadata: {} },
+      message: { id: "2", role: "assistant", content: "queued", createdAt: "2026-01-01T00:00:00Z", metadata: { source: "schedule" } },
     });
     expect(h1).toHaveBeenCalledTimes(1);
     // Re-subscribe — buffered event replays.
