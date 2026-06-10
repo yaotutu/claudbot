@@ -12,7 +12,7 @@ import type { SdkMessage } from "../src/agent/events.ts";
 import type { QueryFactory } from "../src/agent/runner.ts";
 
 describe("scheduler store-ops (CRUD)", () => {
-  test("creates schedule with next run", async () => {
+  test("creates cron schedule with next run", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
     const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
     const storeOps = createStoreOps(store);
@@ -23,7 +23,43 @@ describe("scheduler store-ops (CRUD)", () => {
       message: "run",
     });
     expect(schedule.id.startsWith("sch_")).toBe(true);
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.deleteAfterRun).toBe(false);
     expect(schedule.state.nextRunAt).toBeTruthy();
+  });
+
+  test("creates 'at' one-shot schedule", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const at = new Date(Date.now() + 60_000).toISOString();
+    const schedule = await storeOps.create({
+      name: "reminder",
+      at,
+      message: "drink water",
+    });
+    expect(schedule.kind).toBe("at");
+    expect(schedule.at).toBe(at);
+    expect(schedule.deleteAfterRun).toBe(true);
+    expect(schedule.state.nextRunAt).toBe(at);
+  });
+
+  test("creates 'every' recurring schedule", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const schedule = await storeOps.create({
+      name: "check",
+      everyMs: 300000,
+      message: "check status",
+    });
+    expect(schedule.kind).toBe("every");
+    expect(schedule.everyMs).toBe(300000);
+    expect(schedule.deleteAfterRun).toBe(false);
+    // nextRunAt should be ~5 minutes from now
+    const diff = new Date(schedule.state.nextRunAt).getTime() - Date.now();
+    expect(diff).toBeGreaterThan(250_000);
+    expect(diff).toBeLessThan(350_000);
   });
 
   test("invalid cron is rejected", async () => {
@@ -33,6 +69,15 @@ describe("scheduler store-ops (CRUD)", () => {
     await expect(
       storeOps.create({ name: "bad", cronExpr: "not a cron", timezone: "UTC", message: "x" })
     ).rejects.toThrow();
+  });
+
+  test("no schedule type provided throws", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    await expect(
+      storeOps.create({ name: "empty", message: "x" })
+    ).rejects.toThrow("Must provide one of");
   });
 });
 
@@ -134,6 +179,35 @@ describe("scheduler trigger (execution)", () => {
     const endB = executionOrder.indexOf(`end:${schedB.id}`);
     const endA = executionOrder.indexOf(`end:${schedA.id}`);
     expect(endB).toBeLessThan(endA);
+  });
+
+  test("'at' schedule is deleted after execution", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "done");
+
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const schedule = await storeOps.create({ name: "one-shot", at: past, message: "remind me" });
+    expect(schedule.kind).toBe("at");
+    expect(schedule.deleteAfterRun).toBe(true);
+
+    // Force it due
+    const schedules = await store.listSchedules();
+    schedules[0].state.nextRunAt = past;
+    await store.saveSchedules(schedules);
+
+    await trigger.tick(new Date());
+
+    // Schedule should be gone
+    const remaining = await store.listSchedules();
+    expect(remaining.find((s) => s.id === schedule.id)).toBeUndefined();
+
+    // Run record should exist
+    const runs = await store.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe("succeeded");
+    expect(runs[0].result).toBe("done");
   });
 });
 

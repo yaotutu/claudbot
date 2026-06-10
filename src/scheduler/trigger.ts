@@ -3,7 +3,7 @@
 // Created after queryFactory is available, breaking the circular dependency.
 
 import { newId } from "../utils/id.ts";
-import { computeNextRunAt } from "./store-ops.ts";
+import { computeNextRunAtFromKind } from "./store-ops.ts";
 import type { SchedulerStore } from "./store.ts";
 import type { ScheduleRecord, ScheduleRunRecord } from "./types.ts";
 
@@ -72,9 +72,16 @@ async function runSchedule(
     schedule.state.running = false;
     schedule.state.lastRunAt = start;
     schedule.state.runCount += 1;
-    schedule.state.nextRunAt = computeNextRunAt(schedule.cronExpr, schedule.timezone);
     schedule.updatedAt = now();
-    await store.saveSchedules(schedules);
+
+    if (schedule.deleteAfterRun) {
+      // One-shot schedule: remove after execution
+      const remaining = schedules.filter((s) => s.id !== scheduleId);
+      await store.saveSchedules(remaining);
+    } else {
+      schedule.state.nextRunAt = computeNextRunAtFromKind(schedule);
+      await store.saveSchedules(schedules);
+    }
     await store.updateRun(run);
   }
   return run;

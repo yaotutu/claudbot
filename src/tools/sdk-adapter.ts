@@ -7,7 +7,7 @@ export function createClaudebotSdkMcpServer(registry: ToolRegistry, context: Too
     name: "claudebot",
     version: "0.1.0",
     alwaysLoad: true,
-    instructions: "Claudebot native tools for this personal assistant instance. Use memory_* for user preferences, schedule_* for cron reminders, agent_file_* to read or update user.md/soul.md/memory.json.",
+    instructions: "Claudebot native tools. Use the 'cron' tool for ALL reminders, timers, scheduled tasks, and recurring work — do NOT emulate scheduling with other methods. Use memory_* for user preferences. Use agent_file_* to read or update user.md/soul.md/memory.json.",
     tools: registry.list().map((nativeTool) =>
       sdkTool(nativeTool.name, nativeTool.description, nativeTool.inputSchema as any, async (args: any) => {
         try {

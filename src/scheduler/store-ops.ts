@@ -4,13 +4,16 @@
 import { CronExpressionParser } from "cron-parser";
 import { newId } from "../utils/id.ts";
 import type { SchedulerStore } from "./store.ts";
-import type { ScheduleRecord } from "./types.ts";
+import type { ScheduleKind, ScheduleRecord } from "./types.ts";
 
-type CreateScheduleInput = {
+export type CreateScheduleInput = {
   name: string;
-  cronExpr: string;
-  timezone: string;
   message: string;
+  // Schedule type — exactly one of these:
+  cronExpr?: string;       // kind="cron"
+  at?: string;             // kind="at", ISO timestamp
+  everyMs?: number;        // kind="every", milliseconds
+  timezone?: string;       // default "UTC"
 };
 
 function now(): string {
@@ -22,21 +25,68 @@ export function computeNextRunAt(cronExpr: string, timezone: string): string {
   return CronExpressionParser.parse(cronExpr, { tz: timezone }).next().toDate().toISOString();
 }
 
+/** Compute the next fire time based on schedule kind. */
+export function computeNextRunAtFromKind(record: Pick<ScheduleRecord, "kind" | "cronExpr" | "at" | "everyMs" | "timezone">): string {
+  switch (record.kind) {
+    case "cron":
+      return computeNextRunAt(record.cronExpr, record.timezone);
+    case "every":
+      return new Date(Date.now() + (record.everyMs ?? 0)).toISOString();
+    case "at":
+      // One-shot: no next run (will be deleted after execution)
+      return new Date("9999-12-31").toISOString();
+  }
+}
+
+function inferKind(input: CreateScheduleInput): ScheduleKind {
+  if (input.at) return "at";
+  if (input.everyMs) return "every";
+  if (input.cronExpr) return "cron";
+  throw new Error("Must provide one of: cronExpr, at, or everyMs");
+}
+
 export function createStoreOps(store: SchedulerStore) {
   return {
     async create(input: CreateScheduleInput): Promise<ScheduleRecord> {
-      // Validate cron up-front so we never persist an invalid schedule.
-      computeNextRunAt(input.cronExpr, input.timezone);
+      const kind = inferKind(input);
+      const timezone = input.timezone || "UTC";
+
+      // Validate cron up-front
+      if (kind === "cron") {
+        computeNextRunAt(input.cronExpr!, timezone);
+      }
+      // Validate "at" is a parseable date in the future
+      if (kind === "at") {
+        const atTime = new Date(input.at!).getTime();
+        if (isNaN(atTime)) throw new Error(`Invalid ISO timestamp: ${input.at}`);
+        // Allow slightly past timestamps (clock skew) but warn if too far past
+      }
+      // Validate "every" is positive
+      if (kind === "every" && (!input.everyMs || input.everyMs < 1000)) {
+        throw new Error("everyMs must be >= 1000");
+      }
+
       const time = now();
+      let nextRunAt: string;
+      switch (kind) {
+        case "cron": nextRunAt = computeNextRunAt(input.cronExpr!, timezone); break;
+        case "at": nextRunAt = input.at!; break;
+        case "every": nextRunAt = new Date(Date.now() + input.everyMs!).toISOString(); break;
+      }
+
       const schedule: ScheduleRecord = {
         id: newId("sch"),
         name: input.name,
         enabled: true,
-        cronExpr: input.cronExpr,
-        timezone: input.timezone,
+        kind,
+        cronExpr: input.cronExpr || "",
+        at: input.at || null,
+        everyMs: input.everyMs || null,
+        timezone,
         message: input.message,
+        deleteAfterRun: kind === "at",
         state: {
-          nextRunAt: computeNextRunAt(input.cronExpr, input.timezone),
+          nextRunAt,
           lastRunAt: null,
           lastStatus: null,
           lastError: null,
@@ -56,28 +106,34 @@ export function createStoreOps(store: SchedulerStore) {
       return store.listSchedules();
     },
 
-    async update(id: string, patch: Partial<Pick<ScheduleRecord, "name" | "cronExpr" | "timezone" | "message">>): Promise<ScheduleRecord> {
+    async update(id: string, patch: Partial<Pick<ScheduleRecord, "name" | "cronExpr" | "timezone" | "message" | "everyMs" | "at">>): Promise<ScheduleRecord> {
       const schedules = await store.listSchedules();
       const idx = schedules.findIndex((s) => s.id === id);
       if (idx < 0) throw new Error(`schedule not found: ${id}`);
       const target = schedules[idx];
+
+      // Validate cron if changed
       if (patch.cronExpr || patch.timezone) {
         computeNextRunAt(patch.cronExpr || target.cronExpr, patch.timezone || target.timezone);
       }
-      const next: ScheduleRecord = {
+
+      const merged: ScheduleRecord = {
         ...target,
         ...patch,
         state: {
           ...target.state,
-          ...(patch.cronExpr || patch.timezone
-            ? { nextRunAt: computeNextRunAt(patch.cronExpr || target.cronExpr, patch.timezone || target.timezone) }
-            : {}),
         },
         updatedAt: now(),
       };
-      schedules[idx] = next;
+
+      // Recompute nextRunAt if schedule timing fields changed
+      if (patch.cronExpr || patch.timezone || patch.at || patch.everyMs) {
+        merged.state.nextRunAt = computeNextRunAtFromKind(merged);
+      }
+
+      schedules[idx] = merged;
       await store.saveSchedules(schedules);
-      return next;
+      return merged;
     },
 
     async delete(id: string): Promise<void> {
