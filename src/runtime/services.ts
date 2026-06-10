@@ -15,6 +15,7 @@ import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
 import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
+import { sessionExists } from "../sessions/adapter.ts";
 import { getSessionInfo, renameSession, deleteSession } from "@anthropic-ai/claude-agent-sdk";
 import type { SessionStore as SDKSessionStore, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
 
@@ -68,6 +69,21 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   await profile.init();
   const memory = new MemoryStore(paths.memoryFile);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.runsFile);
+
+  // Validate lastActiveSessionId on startup. If it points to a session that
+  // doesn't exist in the new adapter format (e.g. old sess_*.json or a
+  // phantom UUID from a failed run), clear it so the first user message
+  // creates a fresh session instead of trying to resume a ghost.
+  const initState = await runtimeState.get();
+  if (initState.lastActiveSessionId) {
+    const exists = await sessionExists(paths.sessionsDir, initState.lastActiveSessionId);
+    if (!exists) {
+      await runtimeState.setLastActiveSession("", "stale_reset");
+      console.log(
+        `[init] cleared stale lastActiveSessionId: ${initState.lastActiveSessionId} (no main.jsonl found)`,
+      );
+    }
+  }
 
   // Build the tool registry. The registry depends on the SchedulerService for
   // the schedule_* tools, and the scheduler's executor depends on the

@@ -16,6 +16,21 @@ function sessionDirFor(sessionsDir: string, sessionId: string): string {
   return join(sessionsDir, sessionId);
 }
 
+/**
+ * Check whether a session has a main.jsonl file on disk (i.e. was actually
+ * created by the SDK and mirrored by the adapter). Old-format `sess_*.json`
+ * files return false — they are not valid SDK sessions.
+ */
+export async function sessionExists(sessionsDir: string, sessionId: string): Promise<boolean> {
+  const mainFile = join(sessionsDir, sessionId, "main.jsonl");
+  try {
+    const f = Bun.file(mainFile);
+    return await f.exists();
+  } catch {
+    return false;
+  }
+}
+
 export function createClaudebotSessionStore(
   opts: ClaudebotSessionStoreOptions,
 ): SessionStore {

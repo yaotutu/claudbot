@@ -19,7 +19,7 @@ export class RuntimeStateStore {
     return readJson<RuntimeState>(this.path, emptyState);
   }
 
-  async setLastActiveSession(sessionId: string, reason: "user_open" | "user_switch" | "user_message"): Promise<void> {
+  async setLastActiveSession(sessionId: string, reason: "user_open" | "user_switch" | "user_message" | "stale_reset"): Promise<void> {
     await writeJsonAtomic(this.path, {
       lastActiveSessionId: sessionId,
       lastActiveAt: new Date().toISOString(),

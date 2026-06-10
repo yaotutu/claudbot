@@ -4,6 +4,7 @@ import type { ServerWebSocket } from "bun";
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { WsClientMessage, WsServerMessage } from "./protocol.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
+import { sessionExists } from "../sessions/adapter.ts";
 
 // SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
 // long so the adapter mirror has a chance to flush before we ack the WebUI.
@@ -57,9 +58,16 @@ async function handleClientMessage(
 ): Promise<void> {
   switch (msg.type) {
     case "session.activate": {
-      await services.runtimeState.setLastActiveSession(msg.sessionId, "user_switch");
-      ws.data.sessionId = msg.sessionId;
-      send(ws, { type: "session.updated", sessionId: msg.sessionId });
+      // If the client activates a session that doesn't exist on disk (e.g. a
+      // freshly generated UUID from newChat), clear lastActiveSessionId so the
+      // next user message creates a fresh SDK session instead of trying to resume.
+      const exists = msg.sessionId
+        ? await sessionExists(services.paths.sessionsDir, msg.sessionId)
+        : false;
+      const effectiveId = exists ? msg.sessionId : "";
+      await services.runtimeState.setLastActiveSession(effectiveId, "user_switch");
+      ws.data.sessionId = effectiveId;
+      send(ws, { type: "session.updated", sessionId: effectiveId });
       return;
     }
     case "chat.user_message": {
@@ -85,13 +93,32 @@ export async function runUserTurn(
 ): Promise<void> {
   const send = (m: WsServerMessage) => sendTo(ws, m);
 
-  // Resolve session: either caller-supplied, last active, or null (let SDK create)
+  // Resolve session: either caller-supplied, last active, or null (let SDK create).
+  // Validate that the session actually exists on disk — the adapter only has
+  // entries for sessions the SDK created and the adapter mirrored. Stale IDs
+  // from old-format sess_*.json files or phantom UUIDs must NOT be passed as
+  // `resume` or the SDK will error ("No conversation found").
   let sdkSessionId: string | undefined;
   if (sessionId) {
-    sdkSessionId = sessionId;
+    const exists = await sessionExists(services.paths.sessionsDir, sessionId);
+    if (exists) {
+      sdkSessionId = sessionId;
+    } else {
+      // Stale — clear the runtime state so future requests don't retry
+      await services.runtimeState.setLastActiveSession("", "stale_reset");
+      sdkSessionId = undefined;
+    }
   } else {
     const state = await services.runtimeState.get();
-    sdkSessionId = state.lastActiveSessionId || undefined;
+    if (state.lastActiveSessionId) {
+      const exists = await sessionExists(services.paths.sessionsDir, state.lastActiveSessionId);
+      if (exists) {
+        sdkSessionId = state.lastActiveSessionId;
+      } else {
+        await services.runtimeState.setLastActiveSession("", "stale_reset");
+        sdkSessionId = undefined;
+      }
+    }
   }
 
   // We need a session id before we can persist anything. If we don't have one

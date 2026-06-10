@@ -251,50 +251,22 @@ export class ClaudebotClient {
   }
 
   /**
-   * Ask the server to provision a new chat_id; resolves with the assigned id.
+   * Prepare a new chat context. Returns a local UUID immediately.
    *
-   * Claudebot doesn't have a WS `new_chat` envelope — it has REST POST /api/sessions
-   * that returns a session object, then we attach over WS.
+   * In the jsonl-backed model, sessions are created by the SDK when the first
+   * user message is sent — there is no REST POST /api/sessions. We generate a
+   * local UUID, activate it over WS (so the server clears lastActiveSession),
+   * and return it. The real SDK session UUID is assigned on the first message.
    */
-  newChat(timeoutMs: number = 5_000, _workspaceScope?: unknown): Promise<string> {
-    if (this.pendingNewChat) {
-      return Promise.reject(new Error("newChat already in flight"));
-    }
-    return new Promise<string>(async (resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingNewChat = null;
-        reject(new Error("newChat timed out"));
-      }, timeoutMs);
-      this.pendingNewChat = { resolve, reject, timer };
-      try {
-        const res = await fetch("/api/sessions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title: "" }),
-        });
-        if (!res.ok) throw new Error(`createSession HTTP ${res.status}`);
-        const session = (await res.json()) as { id: string };
-        if (this.pendingNewChat) {
-          clearTimeout(this.pendingNewChat.timer);
-          this.pendingNewChat = null;
-        }
-        this.knownChats.add(session.id);
-        // Activate over WS so subsequent chat events for this session route here.
-        this.queueSend({ type: "session.activate", sessionId: session.id });
-        // Also synthesize a ready event so any pending waiters settle.
-        this.readyChatId = session.id;
-        // Set currentChatId so streaming events arriving before any explicit
-        // attach() (e.g. text_delta from an in-flight turn) still route.
-        this.currentChatId = session.id;
-        resolve(session.id);
-      } catch (e) {
-        if (this.pendingNewChat) {
-          clearTimeout(this.pendingNewChat.timer);
-          this.pendingNewChat = null;
-        }
-        reject(e instanceof Error ? e : new Error(String(e)));
-      }
-    });
+  newChat(_timeoutMs: number = 5_000, _workspaceScope?: unknown): Promise<string> {
+    const chatId = crypto.randomUUID();
+    this.knownChats.add(chatId);
+    // Activate over WS so the server clears its lastActiveSession — the next
+    // user message will create a fresh SDK session instead of resuming.
+    this.queueSend({ type: "session.activate", sessionId: chatId });
+    this.readyChatId = chatId;
+    this.currentChatId = chatId;
+    return Promise.resolve(chatId);
   }
 
   attach(chatId: string): void {
