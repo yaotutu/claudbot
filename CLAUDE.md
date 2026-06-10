@@ -152,3 +152,4 @@ Two non-obvious things in the boot path (`webui/src/App.tsx`):
 - 优先使用函数式编程范式，避免使用类和面向对象的设计。
 - 当前项目与 https://github.com/HKUDS/nanobot 这个项目的用户群体高度相似，遇见不确定的设计决策时，优先参考 nanobot 的实现。
 - 当前项目与 https://github.com/openclaw/openclaw 这个项目的用户群体高度相似，遇见不确定的设计决策时，优先参考 openclaw 的实现。
+- 指定任务的同时必须制定对应的测试用例，并且实际操作页面去测试，确认功能的正确性。然后关闭后台进程，通知用户去手动测试，确认功能的正确性。  

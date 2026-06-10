@@ -1,11 +1,15 @@
 import { z } from "zod/v4";
 import type { ToolRegistry } from "../registry.ts";
-import type { SchedulerService } from "../../scheduler/service.ts";
+import type { SchedulerStoreOps } from "../../scheduler/store-ops.ts";
+import type { SchedulerTrigger } from "../../scheduler/trigger.ts";
 
 const TimezoneSchema = z.string().min(1);
 
-export function registerSchedulerTools(registry: ToolRegistry, deps: { scheduler: SchedulerService }): void {
-  const { scheduler } = deps;
+export function registerSchedulerTools(
+  registry: ToolRegistry,
+  deps: { storeOps: SchedulerStoreOps; getTrigger: () => SchedulerTrigger },
+): void {
+  const { storeOps, getTrigger } = deps;
 
   registry.register({
     name: "schedule_create",
@@ -16,14 +20,14 @@ export function registerSchedulerTools(registry: ToolRegistry, deps: { scheduler
       timezone: TimezoneSchema,
       message: z.string().min(1),
     }),
-    execute: async (input) => scheduler.create(input),
+    execute: async (input) => storeOps.create(input),
   });
 
   registry.register({
     name: "schedule_list",
     description: "List all configured schedules.",
     inputSchema: z.object({}),
-    execute: async () => scheduler.list(),
+    execute: async () => storeOps.list(),
   });
 
   registry.register({
@@ -36,27 +40,27 @@ export function registerSchedulerTools(registry: ToolRegistry, deps: { scheduler
       timezone: TimezoneSchema.optional(),
       message: z.string().min(1).optional(),
     }),
-    execute: async (input) => scheduler.update(input.id, input),
+    execute: async (input) => storeOps.update(input.id, input),
   });
 
   registry.register({
     name: "schedule_delete",
     description: "Delete a schedule by id.",
     inputSchema: z.object({ id: z.string().min(1) }),
-    execute: async (input) => scheduler.delete(input.id),
+    execute: async (input) => storeOps.delete(input.id),
   });
 
   registry.register({
     name: "schedule_set_enabled",
     description: "Enable or disable a schedule.",
     inputSchema: z.object({ id: z.string().min(1), enabled: z.boolean() }),
-    execute: async (input) => scheduler.setEnabled(input.id, input.enabled),
+    execute: async (input) => storeOps.setEnabled(input.id, input.enabled),
   });
 
   registry.register({
     name: "schedule_run_now",
     description: "Trigger an immediate run of a schedule. Respects the running lock.",
     inputSchema: z.object({ id: z.string().min(1) }),
-    execute: async (input) => scheduler.runNow(input.id),
+    execute: async (input) => getTrigger().runNow(input.id),
   });
 }

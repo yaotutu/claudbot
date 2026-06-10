@@ -92,7 +92,7 @@ describe("gateway HTTP", () => {
 
   test("POST /api/schedules/:id/run-now records a run", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
-    const sched = await services.scheduler.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "x" });
+    const sched = await services.storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "x" });
     const res = await handleHttp(
       new Request(`http://x/api/schedules/${sched.id}/run-now`, { method: "POST" }),
       new URL(`http://x/api/schedules/${sched.id}/run-now`),

@@ -115,13 +115,13 @@ export async function handleHttp(
     }
 
     if (path === "/api/schedules" && method === "GET") {
-      return json(200, await services.scheduler.list());
+      return json(200, await services.storeOps.list());
     }
     const scheduleRunMatch = path.match(/^\/api\/schedules\/([A-Za-z0-9_-]+)\/run-now$/);
     if (scheduleRunMatch && method === "POST") {
       const id = scheduleRunMatch[1];
       try {
-        const run = await services.scheduler.runNow(id);
+        const run = await services.trigger.runNow(id);
         return json(200, run);
       } catch (err) {
         return json(400, { error: err instanceof Error ? err.message : String(err) });

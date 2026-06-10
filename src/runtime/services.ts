@@ -1,4 +1,7 @@
 // Service container: per-instance wiring of stores, registry, runner, gateway helpers.
+//
+// Assembly order is linear — no circular dependencies:
+//   Store → StoreOps → Registry → queryFactory → Trigger
 
 import type { RuntimeConfig } from "../config/schema.ts";
 import { loadConfig, type LoadedConfig } from "../config/loader.ts";
@@ -9,7 +12,8 @@ import { RuntimeStateStore } from "./state.ts";
 import { AgentProfileStore } from "../agent/profile.ts";
 import { MemoryStore } from "../memory/store.ts";
 import { SchedulerStore } from "../scheduler/store.ts";
-import { SchedulerService } from "../scheduler/service.ts";
+import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.ts";
+import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
@@ -35,7 +39,8 @@ export type ServiceContainer = {
   profile: AgentProfileStore;
   memory: MemoryStore;
   schedulerStore: SchedulerStore;
-  scheduler: SchedulerService;
+  storeOps: SchedulerStoreOps;
+  trigger: SchedulerTrigger;
   toolRegistry: ToolRegistry;
   queryFactory: QueryFactory;
   sdkSessions: SdkSessionsFacade;
@@ -85,22 +90,28 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     }
   }
 
-  // Build the tool registry. The registry depends on the SchedulerService for
-  // the schedule_* tools, and the scheduler's executor depends on the
-  // queryFactory, which depends on the registry. We break the cycle by:
-  //   1. Building a placeholder SchedulerService that we'll swap out below.
-  //   2. Building the registry with the placeholder.
-  //   3. Building the real queryFactory closed over the real registry.
-  //   4. Building the real SchedulerService that uses the real queryFactory.
-  //   5. Pointing the placeholder → real (the registry holds a reference).
-  const placeholderScheduler: SchedulerService = new SchedulerService(schedulerStore, async () => {
-    throw new Error("placeholder scheduler invoked before real one was wired");
-  });
+  // --- Linear assembly: Store → StoreOps → Registry → queryFactory → Trigger ---
+
+  // 1. CRUD layer (no executor dependency)
+  const storeOps = createStoreOps(schedulerStore);
+
+  // 2. Lazy trigger reference — populated after queryFactory is built.
+  //    Only `schedule_run_now` tool needs the trigger; CRUD tools use storeOps directly.
+  let triggerRef: SchedulerTrigger | undefined;
+  const getTrigger = (): SchedulerTrigger => {
+    if (!triggerRef) throw new Error("scheduler trigger not yet initialized");
+    return triggerRef;
+  };
+
+  // 3. Tool registry (storeOps + getTrigger — no cycle)
   const toolRegistry = buildToolRegistry(config, paths.toolAuditFile, {
-    scheduler: placeholderScheduler,
+    storeOps,
+    getTrigger,
     memory,
     profile,
   });
+
+  // 4. Session store + SDK sessions facade
   const sessionStore = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
   const sdkSessions: SdkSessionsFacade = {
     store: sessionStore,
@@ -115,12 +126,14 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
       await deleteSession(sessionId, { sessionStore });
     },
   };
+
+  // 5. Query factory (uses registry — no cycle)
   const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sessionStore);
-  const realScheduler = new SchedulerService(schedulerStore, async (sched, run) => {
+
+  // 6. Trigger (uses store + executor that closes over queryFactory — no cycle)
+  triggerRef = createSchedulerTrigger(schedulerStore, async (sched, run) => {
     return runScheduledTurn(sched, run, config, toolRegistry, paths, queryFactory);
   });
-  // Re-point the registry's scheduler reference to the real one.
-  (toolRegistry as unknown as { scheduler: SchedulerService }).scheduler = realScheduler;
 
   const makeRunner = (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string): ClaudeRunner => {
     return new ClaudeRunner(
@@ -149,7 +162,8 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     profile,
     memory,
     schedulerStore,
-    scheduler: realScheduler,
+    storeOps,
+    trigger: triggerRef,
     toolRegistry,
     queryFactory,
     sdkSessions,
@@ -160,7 +174,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
 function buildToolRegistry(
   config: RuntimeConfig,
   auditPath: string,
-  services: { scheduler: SchedulerService; memory: MemoryStore; profile: AgentProfileStore },
+  services: { storeOps: SchedulerStoreOps; getTrigger: () => SchedulerTrigger; memory: MemoryStore; profile: AgentProfileStore },
 ): ToolRegistry {
   const permissions = {
     defaultPolicy: config.tools.permissions.default,
