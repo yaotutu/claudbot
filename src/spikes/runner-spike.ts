@@ -26,7 +26,13 @@ const runner = new ClaudeRunner(
       soulFile: paths.soulFile,
     },
   },
-  makeRealQueryFactory(registry, config),
+  makeRealQueryFactory(registry, config, "/tmp/claudebot-spike-sdk", {
+    async append() {},
+    async load() { return []; },
+    async listSessions() { return []; },
+    async delete() {},
+    async listSubkeys() { return []; },
+  }),
 );
 
 console.error("[runner-spike] starting");

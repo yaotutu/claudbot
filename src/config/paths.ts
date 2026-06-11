@@ -17,6 +17,7 @@ export type RuntimePaths = {
   mediaDir: string;
   auditDir: string;
   toolAuditFile: string;
+  sdkConfigDir: string;
 };
 
 export function runtimePaths(config: RuntimeConfig): RuntimePaths {
@@ -37,5 +38,6 @@ export function runtimePaths(config: RuntimeConfig): RuntimePaths {
     mediaDir: join(home, "media"),
     auditDir: join(home, "audit"),
     toolAuditFile: join(home, "audit", "tools.jsonl"),
+    sdkConfigDir: join(home, "sdk-config"),
   };
 }

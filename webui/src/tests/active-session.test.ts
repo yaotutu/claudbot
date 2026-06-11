@@ -53,17 +53,4 @@ describe("pickInitialActiveSession", () => {
       "websocket:sess_recent",
     );
   });
-
-  it("falls back to the first session when lastActiveSessionId is the empty inbox", () => {
-    // The server seeds an empty `inbox` placeholder. If the persisted
-    // lastActiveSessionId points at it, prefer the most recent real chat.
-    const sessions = [
-      makeSession("sess_recent", "2026-04-16T11:00:00Z"),
-      makeSession("sess_old", "2026-04-16T10:00:00Z"),
-    ];
-
-    expect(pickInitialActiveSession(sessions, "inbox")).toBe(
-      "websocket:sess_recent",
-    );
-  });
 });

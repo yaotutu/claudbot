@@ -6,9 +6,10 @@ import { buildServices } from "../src/runtime/services.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { runtimePaths } from "../src/config/paths.ts";
 import { handleHttp } from "../src/gateway/http.ts";
-import { ClaudeRunner, type QueryFactory } from "../src/agent/runner.ts";
+import type { QueryFactory } from "../src/agent/runner.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import { readFileSync } from "node:fs";
+import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
 
 function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
   const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
@@ -36,26 +37,39 @@ describe("gateway HTTP", () => {
     expect(body.status).toBe("ok");
   });
 
-  test("create, list, get session", async () => {
+  test("GET /api/sessions returns empty list when no sessions exist", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
-    const created = await handleHttp(new Request("http://x/api/sessions", { method: "POST", body: JSON.stringify({ title: "hello" }) }), new URL("http://x/api/sessions"), services);
-    expect(created.status).toBe(200);
-    const session = await created.json() as { id: string; title: string };
-    expect(session.title).toBe("hello");
-    expect(session.id).toBeTruthy();
     const list = await handleHttp(new Request("http://x/api/sessions"), new URL("http://x/api/sessions"), services);
+    expect(list.status).toBe(200);
     const arr = await list.json() as { id: string }[];
-    expect(arr.find((s) => s.id === session.id)).toBeTruthy();
+    expect(arr).toEqual([]);
+  });
+
+  test("GET /api/sessions lists sessions seeded by the SDK sessionStore", async () => {
+    const { services, dir } = await makeServices(makeRecordingQueryFactory([]));
+    // Seed a session through the same adapter the SDK uses, so the
+    // /api/sessions listing picks it up via services.sdkSessions.list.
+    const store = createClaudebotSessionStore({ sessionsDir: join(dir, "sessions") });
+    const key = { projectKey: "claudebot", sessionId: "sess-seeded" };
+    await store.append(key, [
+      { type: "user", uuid: "u1", timestamp: "2026-06-09T10:00:00Z", message: { role: "user", content: "hi" } },
+    ]);
+    const list = await handleHttp(new Request("http://x/api/sessions"), new URL("http://x/api/sessions"), services);
+    expect(list.status).toBe(200);
+    const arr = await list.json() as { id: string }[];
+    expect(arr.find((s) => s.id === "sess-seeded")).toBeTruthy();
   });
 
   test("POST /api/sessions/:id/activate updates last active", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
-    const create = await handleHttp(new Request("http://x/api/sessions", { method: "POST" }), new URL("http://x/api/sessions"), services);
-    const session = await create.json() as { id: string };
-    const activate = await handleHttp(new Request(`http://x/api/sessions/${session.id}/activate`, { method: "POST" }), new URL(`http://x/api/sessions/${session.id}/activate`), services);
+    const activate = await handleHttp(
+      new Request("http://x/api/sessions/sess_activate_test/activate", { method: "POST" }),
+      new URL("http://x/api/sessions/sess_activate_test/activate"),
+      services,
+    );
     expect(activate.status).toBe(200);
     const state = await services.runtimeState.get();
-    expect(state.lastActiveSessionId).toBe(session.id);
+    expect(state.lastActiveSessionId).toBe("sess_activate_test");
   });
 
   test("PUT /api/agent/files/:name returns 409 on stale version", async () => {
@@ -78,7 +92,7 @@ describe("gateway HTTP", () => {
 
   test("POST /api/schedules/:id/run-now records a run", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
-    const sched = await services.scheduler.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "x" });
+    const sched = await services.storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "x" });
     const res = await handleHttp(
       new Request(`http://x/api/schedules/${sched.id}/run-now`, { method: "POST" }),
       new URL(`http://x/api/schedules/${sched.id}/run-now`),
@@ -99,35 +113,70 @@ describe("gateway HTTP", () => {
 });
 
 describe("WebSocket chat.user_message end-to-end (mocked runner)", () => {
-  test("user message -> mocked runner -> assistant message appended", async () => {
+  test("user message -> mocked runner -> assistant text_delta + turn_done", async () => {
     const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
     const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
     const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
     const factory = makeRecordingQueryFactory([init, text, result]);
     const { services } = await makeServices(factory);
 
-    // Create + activate a session via HTTP
-    const create = await handleHttp(new Request("http://x/api/sessions", { method: "POST" }), new URL("http://x/api/sessions"), services);
-    const session = await create.json() as { id: string };
-    await handleHttp(new Request(`http://x/api/sessions/${session.id}/activate`, { method: "POST" }), new URL(`http://x/api/sessions/${session.id}/activate`), services);
-
-    // Drive a user turn via the runner (mimics the WS handler)
-    const runner = services.makeRunner("user_turn", session.id);
+    // No POST /api/sessions create — sessions are created on the first user
+    // turn by the SDK itself. Drive the runner with a fresh session id.
+    const sessionId = "sess_ws_e2e";
+    const runner = services.makeRunner("user_turn", sessionId);
     const events: { type: string; text?: string; result?: string; sessionId?: string }[] = [];
-    for await (const ev of runner.run({ prompt: "hi" })) events.push(ev as never);
+    for await (const ev of runner.run({ prompt: "hi", resumeSessionId: sessionId })) events.push(ev as never);
     expect(events.some((e) => e.type === "text_delta")).toBe(true);
     expect(events.some((e) => e.type === "turn_done")).toBe(true);
 
-    // Append user + assistant messages to the session
-    const record = await services.sessions.get(session.id);
-    expect(record).toBeTruthy();
-    await services.sessions.appendMessage(session.id, { role: "user", content: "hi", metadata: {} });
-    await services.sessions.appendMessage(session.id, { role: "assistant", content: events.find((e) => e.type === "text_delta")?.text || "", metadata: {} });
-    const after = await services.sessions.get(session.id);
-    expect(after?.messages.length).toBe(2);
-    expect(after?.messages[1].role).toBe("assistant");
-
     expect(factory.calls.length).toBe(1);
     expect(factory.calls[0].prompt).toBe("hi");
+  });
+});
+
+describe("runUserTurn", () => {
+  test("does not call sessions.save and forwards the runner stream", async () => {
+    const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
+    const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
+    const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
+    const factory = makeRecordingQueryFactory([init, text, result]);
+    const { services } = await makeServices(factory);
+
+    // Spy on the only write API on services.sessions — runUserTurn must not
+    // persist anything through it. Conversation history is the SDK's job via
+    // the jsonl sessionStore adapter.
+    const origSave = services.sessions.save.bind(services.sessions);
+    let saveCalled = false;
+    (services.sessions as unknown as { save: (...args: unknown[]) => Promise<void> }).save = async (...args: unknown[]) => {
+      saveCalled = true;
+      return origSave(...(args as Parameters<typeof origSave>));
+    };
+
+    // Stub WebSocket-like object: runUserTurn writes to ws.data.sessionId
+    // after the run, so the fake needs both `send` and a mutable `data`.
+    const sent: unknown[] = [];
+    const fakeWs = {
+      send: (data: string) => sent.push(JSON.parse(data)),
+      data: { sessionId: "", services, send: (m: unknown) => sent.push(m) },
+    } as unknown as Parameters<typeof import("../src/gateway/websocket.ts").runUserTurn>[0];
+
+    const { runUserTurn } = await import("../src/gateway/websocket.ts");
+    await runUserTurn(
+      fakeWs,
+      services,
+      null,
+      "hi",
+    );
+
+    expect(saveCalled).toBe(false);
+
+    // The runner stream was forwarded as agent.* frames.
+    const types = sent.map((m) => (m as { type: string }).type);
+    expect(types).toContain("agent.text_delta");
+    expect(types).toContain("agent.turn_done");
+    // The final assistant message goes out as a single message.appended frame.
+    expect(types).toContain("message.appended");
+    const appended = sent.find((m) => (m as { type: string }).type === "message.appended") as { type: string; message: { role: string; content: string } } | undefined;
+    expect(appended?.message.role).toBe("assistant");
   });
 });

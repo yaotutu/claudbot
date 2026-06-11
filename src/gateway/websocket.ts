@@ -4,6 +4,12 @@ import type { ServerWebSocket } from "bun";
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { WsClientMessage, WsServerMessage } from "./protocol.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
+import { sessionExists } from "../sessions/adapter.ts";
+
+// SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
+// long so the adapter mirror has a chance to flush before we ack the WebUI.
+// If SDK adds a flush() signal in the future, replace this with that.
+const MIRROR_FLUSH_SETTLE_MS = 50;
 
 export type WsData = {
   sessionId: string;
@@ -16,7 +22,7 @@ export function makeWsHandlers(services: ServiceContainer) {
 
   return {
     open(ws: ServerWebSocket<WsData>) {
-      ws.data = { sessionId: "inbox", services, send: (m) => ws.send(JSON.stringify(m)) };
+      ws.data = { sessionId: "", services, send: (m) => ws.send(JSON.stringify(m)) };
       connections.add(ws);
     },
     message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
@@ -38,6 +44,13 @@ export function makeWsHandlers(services: ServiceContainer) {
       connections.delete(ws);
     },
     connections,
+    /** Broadcast a message to all connected WebSocket clients. */
+    broadcast(msg: WsServerMessage) {
+      const raw = JSON.stringify(msg);
+      for (const c of connections) {
+        try { c.send(raw); } catch { /* socket may be closed */ }
+      }
+    },
   };
 }
 
@@ -52,15 +65,23 @@ async function handleClientMessage(
 ): Promise<void> {
   switch (msg.type) {
     case "session.activate": {
-      await services.runtimeState.setLastActiveSession(msg.sessionId, "user_switch");
-      ws.data.sessionId = msg.sessionId;
-      send(ws, { type: "session.updated", sessionId: msg.sessionId });
+      // If the client activates a session that doesn't exist on disk (e.g. a
+      // freshly generated UUID from newChat), clear lastActiveSessionId so the
+      // next user message creates a fresh SDK session instead of trying to resume.
+      const exists = msg.sessionId
+        ? await sessionExists(services.paths.sessionsDir, msg.sessionId)
+        : false;
+      const effectiveId = exists ? msg.sessionId : "";
+      await services.runtimeState.setLastActiveSession(effectiveId, "user_switch");
+      ws.data.sessionId = effectiveId;
+      send(ws, { type: "session.updated", sessionId: effectiveId });
       return;
     }
     case "chat.user_message": {
       const state = await services.runtimeState.get();
-      let sessionId = state.lastActiveSessionId || "inbox";
-      if (ws.data.sessionId && ws.data.sessionId !== "inbox") sessionId = ws.data.sessionId;
+      const sessionId = ws.data.sessionId && ws.data.sessionId !== "pending"
+        ? ws.data.sessionId
+        : (state.lastActiveSessionId || null);
       await runUserTurn(ws, services, sessionId, msg.content);
       return;
     }
@@ -74,35 +95,59 @@ async function handleClientMessage(
 export async function runUserTurn(
   ws: ServerWebSocket<WsData>,
   services: ServiceContainer,
-  sessionId: string,
+  sessionId: string | null,
   content: string,
 ): Promise<void> {
-  const session = await services.sessions.getOrCreateInbox().then(async (inbox) => {
-    if (sessionId === "inbox") return inbox;
-    return (await services.sessions.get(sessionId)) || inbox;
-  });
-  sessionId = session.id;
-  await services.runtimeState.setLastActiveSession(sessionId, "user_message");
-  ws.data.sessionId = sessionId;
   const send = (m: WsServerMessage) => sendTo(ws, m);
 
-  const userMsg = await services.sessions.appendMessage(sessionId, { role: "user", content, metadata: {} });
-  send({ type: "message.appended", sessionId, message: userMsg.messages[userMsg.messages.length - 1] });
-  send({ type: "session.updated", sessionId });
+  // Resolve session: either caller-supplied, last active, or null (let SDK create).
+  // Validate that the session actually exists on disk — the adapter only has
+  // entries for sessions the SDK created and the adapter mirrored. Stale IDs
+  // from old-format sess_*.json files or phantom UUIDs must NOT be passed as
+  // `resume` or the SDK will error ("No conversation found").
+  let sdkSessionId: string | undefined;
+  if (sessionId) {
+    const exists = await sessionExists(services.paths.sessionsDir, sessionId);
+    if (exists) {
+      sdkSessionId = sessionId;
+    } else {
+      // Stale — clear the runtime state so future requests don't retry
+      await services.runtimeState.setLastActiveSession("", "stale_reset");
+      sdkSessionId = undefined;
+    }
+  } else {
+    const state = await services.runtimeState.get();
+    if (state.lastActiveSessionId) {
+      const exists = await sessionExists(services.paths.sessionsDir, state.lastActiveSessionId);
+      if (exists) {
+        sdkSessionId = state.lastActiveSessionId;
+      } else {
+        await services.runtimeState.setLastActiveSession("", "stale_reset");
+        sdkSessionId = undefined;
+      }
+    }
+  }
 
-  const runner = services.makeRunner("user_turn", sessionId);
-  const resumeId = session.claudeSessionId || undefined;
-  const collected: string[] = [];
+  // We need a session id before we can persist anything. If we don't have one
+  // yet, run the query and capture the new id from system/init or the result.
+  const runner = services.makeRunner("user_turn", sdkSessionId ?? "pending");
+  let lastSessionId: string | undefined = sdkSessionId;
+  let collected = "";
   let turnErrored = false;
   let finalResult = "";
-  let lastSessionId: string | undefined;
+
   try {
-    for await (const ev of runner.run({ prompt: content, resumeSessionId: resumeId })) {
+    for await (const ev of runner.run({ prompt: content, resumeSessionId: sdkSessionId })) {
+      // Surface mirror_error so WebUI status reflects SDK health
+      if (ev.type === "error" && ev.message.includes("mirror_error")) {
+        send({ type: "agent.status", status: "mirror_error", sessionId: ev.sessionId });
+        continue;
+      }
       forward(send, ev);
-      if (ev.type === "text_delta") collected.push(ev.text);
+      if (ev.type === "text_delta") collected += ev.text;
       if (ev.type === "turn_done") {
         finalResult = ev.result;
-        lastSessionId = ev.sessionId || lastSessionId;
+        if (ev.sessionId) lastSessionId = ev.sessionId;
       }
       if (ev.type === "error") {
         turnErrored = true;
@@ -113,16 +158,38 @@ export async function runUserTurn(
     turnErrored = true;
     finalResult = `[error] ${err instanceof Error ? err.message : String(err)}`;
   }
+
   if (lastSessionId) {
-    session.claudeSessionId = lastSessionId;
+    await services.runtimeState.setLastActiveSession(lastSessionId, "user_message");
+    ws.data.sessionId = lastSessionId;
   }
-  const finalText = collected.join("") || finalResult || (turnErrored ? "(no response)" : "(no response)");
-  const assistantMsg = await services.sessions.appendMessage(sessionId, {
-    role: "assistant",
-    content: finalText,
-    metadata: turnErrored ? { error: true } : {},
+
+  // First message in a new session — set the title from the user's message
+  // so the sidebar shows a meaningful name immediately and it persists across
+  // page refreshes.
+  if (!sdkSessionId && lastSessionId) {
+    try {
+      await services.sdkSessions.rename(lastSessionId, content.slice(0, 60));
+    } catch { /* non-critical */ }
+  }
+
+  // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
+  // beat to flush before we ack the WebUI.
+  await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
+
+  const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
+  const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
+  send({
+    type: "message.appended",
+    sessionId: activeSdkId,
+    message: {
+      id: `local-${Date.now()}`,
+      role: turnErrored ? "system" : "assistant",
+      content: finalText,
+      createdAt: new Date().toISOString(),
+      metadata: turnErrored ? { error: true } : {},
+    },
   });
-  send({ type: "message.appended", sessionId, message: assistantMsg.messages[assistantMsg.messages.length - 1] });
 }
 
 function sendTo(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {

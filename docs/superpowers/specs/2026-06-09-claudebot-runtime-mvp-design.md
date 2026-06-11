@@ -29,7 +29,7 @@ This MVP focuses on the runtime required by the WebUI. CLI chat, multi-channel d
 - Scheduler includes `schedule_run_now`.
 - Scheduler failures are not retried automatically, but are persisted and reported to the user.
 - Scheduler results are delivered to the last user-activated session.
-- If no last active session exists, use or create an `inbox` session.
+- If no last active session exists, the scheduler skips the run.
 - Scheduled turns are one-off Claude turns that inherit the current agent files, memory, workspace, and tools.
 - Scheduled turns do not become normal sessions.
 - Schedule run history stores final result or error, not full transcripts.
@@ -339,19 +339,19 @@ Re-entry behavior:
 
 ## Sessions
 
-Session JSON:
+Session metadata is stored as a small JSON file (id, title, preview, claudeSessionId, createdAt, updatedAt). Message content is **not** stored in this file — it is owned by the Claude Agent SDK and mirrored into per-session `.jsonl` files via the `ClaudebotSessionStore` adapter (`src/sessions/adapter.ts`). The SDK's `session_id` is the canonical session identifier; `claudeSessionId` is preserved for compatibility with the metadata file but is set to the same value.
 
-```json
-{
-  "id": "sess_...",
-  "title": "New chat",
-  "preview": "",
-  "claudeSessionId": "",
-  "createdAt": "2026-06-09T00:00:00.000Z",
-  "updatedAt": "2026-06-09T00:00:00.000Z",
-  "messages": []
-}
+Layout under the home directory:
+
 ```
+~/.claudebot/
+  sessions/<sdkSessionId>/
+    main.jsonl
+    subagents/
+      agent-<id>.jsonl
+```
+
+The `main.jsonl` file is written by the SDK (via the adapter); the gateway reads it back through `parseJsonlToUIMessages` (`src/sessions/jsonl-parser.ts`) when WebUI requests history. There is no `inbox` magic id — the first user message creates a new SDK session, and `runtimeState.lastActiveSessionId` is set to the resulting UUID.
 
 Message JSON:
 
@@ -374,7 +374,7 @@ Assistant messages may include metadata for tool events, thinking, schedule deli
 - Update when the user sends a message.
 - Do not update when the assistant or scheduler appends a message.
 
-If no active session exists, the gateway creates or uses `inbox`.
+If no active session exists, the gateway lets the SDK create one (the resulting `session_id` is written to `runtimeState.lastActiveSessionId`). There is no `inbox` magic id.
 
 ## Gateway HTTP API
 
@@ -383,8 +383,6 @@ MVP endpoints:
 - `GET /health`
 - `GET /webui/bootstrap`
 - `GET /api/sessions`
-- `POST /api/sessions`
-- `GET /api/sessions/:id`
 - `PATCH /api/sessions/:id`
 - `DELETE /api/sessions/:id`
 - `GET /api/sessions/:id/messages`

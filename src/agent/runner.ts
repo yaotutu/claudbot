@@ -7,6 +7,7 @@ import type { ToolRegistry } from "../tools/registry.ts";
 import { buildSystemPrompt, type PromptInputs } from "./prompt.ts";
 import type { AssistantContent, NormalizedEvent, SdkMessage, UserContent } from "./events.ts";
 import type { RuntimeConfig } from "../config/schema.ts";
+import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
 
 export type ClaudeRunnerDeps = {
   config: RuntimeConfig;
@@ -55,13 +56,7 @@ export class ClaudeRunner {
         const msg = raw as SdkMessage;
         if (msg.session_id) lastSessionId = msg.session_id;
         for (const ev of normalize(msg, lastSessionId)) {
-          // For text/thinking deltas, slice the content into small chunks and
-          // yield them with a tiny pause so the UI can paint incrementally.
-          // The Claude Agent SDK returns the whole content in one block for
-          // non-Anthropic endpoints (e.g. BigModel/glm-5.1), so without this
-          // every "stream" lands as a single frame and the UI flashes the
-          // final answer instead of typing it out.
-          yield* maybeChunk(ev);
+          yield ev;
         }
       }
     } catch (err) {
@@ -87,10 +82,35 @@ export class ClaudeRunner {
 export function makeRealQueryFactory(
   registry: ToolRegistry,
   config: RuntimeConfig,
+  sdkConfigDir: string,
+  sessionStore: SessionStore,
 ): QueryFactory {
   return async function* ({ prompt, resumeSessionId, systemPrompt, toolContext }) {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const mcpServer = createClaudebotSdkMcpServer(registry, toolContext);
+    // The SDK's `Options.env` is the only way to point the Claude Code
+    // subprocess at a non-Anthropic endpoint — it has no direct `baseUrl`/
+    // `apiKey` fields. We translate our config into the env vars the
+    // subprocess reads, and spread `process.env` first so the subprocess
+    // still has PATH, HOME, etc. Config wins over process.env when set.
+    // We set both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN because the
+    // Claude Code CLI checks the AUTH_TOKEN variant when the base URL is
+    // a non-Anthropic host (proxy / OpenAI-compat / BigModel etc.) and
+    // 401s otherwise — even though the proxy itself would accept either.
+    // CLAUDE_CONFIG_DIR pins the SDK subprocess to a claudebot-owned
+    // config directory so its session storage lives under our home
+    // directory rather than the user's default ~/.claude.
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: sdkConfigDir,
+      ...(config.claudeCode.baseUrl ? { ANTHROPIC_BASE_URL: config.claudeCode.baseUrl } : {}),
+      ...(config.claudeCode.apiKey
+        ? {
+            ANTHROPIC_API_KEY: config.claudeCode.apiKey,
+            ANTHROPIC_AUTH_TOKEN: config.claudeCode.apiKey,
+          }
+        : {}),
+    };
     const stream = query({
       prompt,
       options: {
@@ -98,8 +118,10 @@ export function makeRealQueryFactory(
         systemPrompt,
         permissionMode: config.claudeCode.permissionMode,
         maxTurns: config.claudeCode.maxTurns,
+        env,
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         mcpServers: { claudebot: mcpServer },
+        sessionStore,
       },
     });
     for await (const msg of stream) yield msg;
@@ -162,50 +184,3 @@ function assistantContentToEvent(c: AssistantContent | UserContent, sid?: string
   return [];
 }
 
-/**
- * For non-Anthropic endpoints, the Claude Agent SDK returns the entire
- * assistant content in one block (verified for glm-5.1: one ~136-char
- * thinking chunk, one ~9-char text chunk, all in a single assistant
- * message). Without intervention the UI flashes the final answer instead
- * of typing it out.
- *
- * We slice text/thinking deltas into small chunks (~6 chars) and yield
- * them with a tiny pause. The downstream client gets many small frames
- * and can re-render incrementally.
- */
-const STREAM_CHUNK_SIZE = 6;
-const STREAM_CHUNK_PAUSE_MS = 12;
-
-async function* maybeChunk(ev: NormalizedEvent): AsyncGenerator<NormalizedEvent> {
-  if (ev.type === "text_delta" && ev.text.length > STREAM_CHUNK_SIZE) {
-    yield* chunkText(ev.text, STREAM_CHUNK_SIZE, STREAM_CHUNK_PAUSE_MS, (text) => ({
-      type: "text_delta",
-      text,
-      sessionId: ev.sessionId,
-    }));
-    return;
-  }
-  if (ev.type === "thinking_delta" && ev.thinking.length > STREAM_CHUNK_SIZE) {
-    yield* chunkText(ev.thinking, STREAM_CHUNK_SIZE, STREAM_CHUNK_PAUSE_MS, (text) => ({
-      type: "thinking_delta",
-      thinking: text,
-      sessionId: ev.sessionId,
-    }));
-    return;
-  }
-  yield ev;
-}
-
-async function* chunkText(
-  text: string,
-  size: number,
-  pauseMs: number,
-  make: (chunk: string) => NormalizedEvent,
-): AsyncGenerator<NormalizedEvent> {
-  for (let i = 0; i < text.length; i += size) {
-    yield make(text.slice(i, i + size));
-    if (i + size < text.length && pauseMs > 0) {
-      await new Promise((r) => setTimeout(r, pauseMs));
-    }
-  }
-}

@@ -1,10 +1,16 @@
+export type ScheduleKind = "at" | "every" | "cron";
+
 export type ScheduleRecord = {
   id: string;
   name: string;
   enabled: boolean;
-  cronExpr: string;
+  kind: ScheduleKind;
+  cronExpr: string;         // kind="cron" — cron expression
+  at: string | null;        // kind="at" — ISO timestamp
+  everyMs: number | null;   // kind="every" — interval in milliseconds
   timezone: string;
   message: string;
+  deleteAfterRun: boolean;  // kind="at" → true automatically
   state: {
     nextRunAt: string;
     lastRunAt: string | null;

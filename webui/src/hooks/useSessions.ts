@@ -61,10 +61,48 @@ export function useSessions(): {
   }, [refresh]);
 
   useEffect(() => {
-    return client.onSessionUpdate(() => {
-      void refresh();
+    // Subscribe to message.appended events and update the affected session's
+    // preview + updatedAt locally. The message content is already in the
+    // event payload, so no server roundtrip is needed — this is what
+    // previously caused the request storm (refresh() on every event).
+    const unsubscribe = client.onMessageAppended((sessionId, content) => {
+      const key = `websocket:${sessionId}`;
+      setSessions((prev) => {
+        const idx = prev.findIndex((s) => s.key === key);
+        if (idx === -1) return prev; // unknown session — ignore
+        const next = prev.slice();
+        next[idx] = {
+          ...next[idx],
+          preview: content.slice(0, 120),
+          updatedAt: new Date().toISOString(),
+        };
+        return next;
+      });
     });
-  }, [client, refresh]);
+    return unsubscribe;
+  }, [client]);
+
+  // When the server assigns a real SDK session ID (replacing the local
+  // placeholder from newChat), remap the session key so the sidebar
+  // doesn't show two entries for the same conversation.
+  useEffect(() => {
+    const unsubscribe = client.onSessionRemap((oldChatId, newChatId) => {
+      const oldKey = `websocket:${oldChatId}`;
+      const newKey = `websocket:${newChatId}`;
+      setSessions((prev) => {
+        const idx = prev.findIndex((s) => s.key === oldKey);
+        if (idx === -1) return prev;
+        const next = prev.slice();
+        next[idx] = { ...next[idx], key: newKey, chatId: newChatId };
+        return next;
+      });
+      // The real SDK session is now known to the server — drop optimistic flag
+      if (optimisticKeysRef.current.has(oldKey)) {
+        optimisticKeysRef.current.delete(oldKey);
+      }
+    });
+    return unsubscribe;
+  }, [client]);
 
   const createChat = useCallback(async (workspaceScope?: WorkspaceScopePayload | null): Promise<string> => {
     const chatId = await client.newChat(5_000, workspaceScope);

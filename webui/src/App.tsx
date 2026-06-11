@@ -7,6 +7,7 @@
 // skills catalog, and no workspace scoping.
 
 import { useEffect, useMemo, useState } from "react";
+import { useClient } from "@/providers/ClientProvider";
 
 import { Sidebar } from "@/components/Sidebar";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -99,6 +100,7 @@ export default function App() {
 
 function Shell({ lastActiveSessionId }: { lastActiveSessionId: string | null }) {
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
+  const { client } = useClient();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
@@ -107,12 +109,22 @@ function Shell({ lastActiveSessionId }: { lastActiveSessionId: string | null }) 
 
   useEffect(() => {
     if (activeKey) return;
-    // Pick the session the user was last on. If we can't find it (e.g. it was
-    // the empty `inbox` placeholder, or it has been deleted), fall through to
-    // the most recently updated session so the UI doesn't open onto a blank.
+    // Pick the session the user was last on. If we can't find it (e.g. it has
+    // been deleted), fall through to the most recently updated session so the
+    // UI doesn't open onto a blank.
     const next = pickInitialActiveSession(sessions, lastActiveSessionId);
     if (next) setActiveKey(next);
   }, [sessions, activeKey, lastActiveSessionId]);
+
+  // When the server assigns a real SDK session ID (replacing the local
+  // placeholder from newChat), update activeKey so the view stays correct.
+  useEffect(() => {
+    const unsubscribe = client.onSessionRemap((oldChatId, newChatId) => {
+      const oldKey = `websocket:${oldChatId}`;
+      setActiveKey((prev) => prev === oldKey ? `websocket:${newChatId}` : prev);
+    });
+    return unsubscribe;
+  }, [client]);
 
   const activeSession: ChatSummary | null = useMemo(() => {
     if (!activeKey) return null;

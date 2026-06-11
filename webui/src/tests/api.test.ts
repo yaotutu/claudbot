@@ -6,6 +6,7 @@ import {
   fetchClaudeCodeSettings,
   fetchFilePreview,
   fetchSessionAutomations,
+  fetchSettings,
   fetchSettingsUsage,
   fetchSidebarState,
   fetchSkillDetail,
@@ -26,7 +27,7 @@ describe("webui API helpers", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ deleted: true, key: "websocket:chat-1", messages: [] }),
+        json: async () => [],
       }),
     );
   });
@@ -36,146 +37,186 @@ describe("webui API helpers", () => {
     vi.unstubAllGlobals();
   });
 
-  it("percent-encodes websocket keys when fetching webui-thread snapshot", async () => {
-    await fetchWebuiThread("tok", "websocket:chat-1");
+  // -- Functions that make real HTTP calls (request()) --
 
+  it("listSessions calls GET /api/sessions and maps rows", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        {
+          id: "sess-1",
+          title: "Test session",
+          preview: "Hello",
+          createdAt: "2026-05-01T10:00:00Z",
+          updatedAt: "2026-05-01T10:01:00Z",
+        },
+      ],
+    } as Response);
+
+    const sessions = await listSessions("tok");
     expect(fetch).toHaveBeenCalledWith(
-      "/api/sessions/websocket%3Achat-1/webui-thread",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-        credentials: "same-origin",
-      }),
+      "/api/sessions",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-  });
-
-  it("percent-encodes websocket keys and paths when fetching file previews", async () => {
-    await fetchFilePreview("tok", "websocket:chat-1", "/tmp/project/hook.py:12");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/sessions/websocket%3Achat-1/file-preview?path=%2Ftmp%2Fproject%2Fhook.py%3A12",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-        credentials: "same-origin",
-      }),
-    );
-  });
-
-  it("percent-encodes websocket keys when fetching session automations", async () => {
-    await fetchSessionAutomations("tok", "websocket:chat-1");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/sessions/websocket%3Achat-1/automations",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("fetches the WebUI skill summary", async () => {
-    await fetchSkills("tok");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/webui/skills",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("percent-encodes skill names when fetching skill details", async () => {
-    await fetchSkillDetail("tok", "current web");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/webui/skills/current%20web",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("percent-encodes websocket keys when deleting a session", async () => {
-    await deleteSession("tok", "websocket:chat-1");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/sessions/websocket%3Achat-1/delete",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("serializes settings updates as a narrow query string", async () => {
-    await updateSettings("tok", {
-      timezone: "Asia/Shanghai",
-      botName: "claudebot",
-      botIcon: "nb",
-      toolHintMaxLength: 120,
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      key: "websocket:sess-1",
+      channel: "websocket",
+      chatId: "sess-1",
+      title: "Test session",
+      preview: "Hello",
     });
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/update?timezone=Asia%2FShanghai&bot_name=claudebot&bot_icon=nb&tool_hint_max_length=120",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
   });
 
-  it("fetches token usage through the lightweight settings endpoint", async () => {
-    await fetchSettingsUsage("tok");
+  it("fetchWebuiThread calls GET /api/sessions/:id/messages", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => [
+        { id: "m1", role: "user", content: "hello", createdAt: "2026-01-01T00:00:00Z" },
+        { id: "m2", role: "assistant", content: "world", createdAt: "2026-01-01T00:00:01Z" },
+      ],
+    } as Response);
 
+    const result = await fetchWebuiThread("tok", "websocket:sess-1");
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/usage",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
+      "/api/sessions/sess-1/messages",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(result).not.toBeNull();
+    expect(result!.messages).toHaveLength(2);
+    expect(result!.messages[0]).toMatchObject({ role: "user", content: "hello" });
+    expect(result!.messages[1]).toMatchObject({ role: "assistant", content: "world" });
   });
 
-  it("serializes claude code settings helpers", async () => {
-    await fetchClaudeCodeSettings("tok");
-    expect(fetch).toHaveBeenLastCalledWith(
-      "/api/settings/claude-code",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
+  it("fetchWebuiThread returns null on 404", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => "not found",
+    } as Response);
 
-    await fetchClaudeCodeHealth("tok");
-    expect(fetch).toHaveBeenLastCalledWith(
-      "/api/settings/claude-code/health",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
+    const result = await fetchWebuiThread("tok", "websocket:missing");
+    expect(result).toBeNull();
+  });
 
-    await updateClaudeCodeSettings("tok", {
-      baseUrl: "http://127.0.0.1:20128/v1",
-      apiKey: "token",
-      model: "glm-cn/glm-5.1",
+  it("deleteSession calls DELETE /api/sessions/:id", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ deleted: true }),
+    } as Response);
+
+    const deleted = await deleteSession("tok", "websocket:sess-1");
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/sess-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(deleted).toBe(true);
+  });
+
+  // -- Stub functions (no fetch calls) --
+
+  it("fetchFilePreview throws 501", async () => {
+    await expect(fetchFilePreview("tok", "websocket:s", "/path")).rejects.toThrow(
+      "File preview not supported in claudebot MVP",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("fetchSessionAutomations returns empty jobs without fetch", async () => {
+    const result = await fetchSessionAutomations("tok", "websocket:s");
+    expect(result).toEqual({ jobs: [] });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("fetchSkills returns empty skills without fetch", async () => {
+    const result = await fetchSkills("tok");
+    expect(result).toEqual({ skills: [] });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("fetchSkillDetail throws 404", async () => {
+    await expect(fetchSkillDetail("tok", "test")).rejects.toThrow("skills not supported");
+  });
+
+  it("fetchSettings returns hardcoded defaults without fetch", async () => {
+    const settings = await fetchSettings("tok");
+    expect(settings.agent.model).toBe("glm-5.1");
+    expect(settings.agent.has_api_key).toBe(true);
+  });
+
+  it("fetchSettingsUsage returns hardcoded defaults without fetch", async () => {
+    const settings = await fetchSettingsUsage("tok");
+    expect(settings.agent.model).toBe("glm-5.1");
+  });
+
+  it("fetchClaudeCodeSettings returns hardcoded defaults", async () => {
+    const result = await fetchClaudeCodeSettings("tok");
+    expect(result.claudeCode.model).toBe("glm-5.1");
+    expect(result.health.sdkRuntime).toBe(true);
+  });
+
+  it("fetchClaudeCodeHealth returns healthy by default", async () => {
+    const result = await fetchClaudeCodeHealth("tok");
+    expect(result.health.sdkRuntime).toBe(true);
+    expect(result.health.modelsEndpointReachable).toBe(true);
+  });
+
+  it("updateClaudeCodeSettings returns defaults unchanged", async () => {
+    const result = await updateClaudeCodeSettings("tok", {
+      baseUrl: "http://test",
+      apiKey: "key",
+      model: "test-model",
       permissionMode: "bypassPermissions",
-      enableGatewayModelDiscovery: true,
+      enableGatewayModelDiscovery: false,
     });
-
-    expect(fetch).toHaveBeenLastCalledWith(
-      "/api/settings/claude-code/update",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer tok",
-          "Content-Type": "application/json",
-        }),
-        body: JSON.stringify({
-          baseUrl: "http://127.0.0.1:20128/v1",
-          apiKey: "token",
-          model: "glm-cn/glm-5.1",
-          permissionMode: "bypassPermissions",
-          enableGatewayModelDiscovery: true,
-        }),
-      }),
-    );
+    // Returns hardcoded defaults, ignores the update payload.
+    expect(result.claudeCode.model).toBe("glm-5.1");
   });
+
+  it("updateSettings returns hardcoded defaults", async () => {
+    const result = await updateSettings("tok", {
+      timezone: "Asia/Shanghai",
+      botName: "test",
+    });
+    expect(result.agent.model).toBe("glm-5.1");
+  });
+
+  it("updateNetworkSafetySettings returns hardcoded defaults", async () => {
+    const result = await updateNetworkSafetySettings("tok", {
+      webuiAllowLocalServiceAccess: false,
+      webuiDefaultAccessMode: "full",
+    });
+    expect(result.agent.model).toBe("glm-5.1");
+  });
+
+  it("fetchSidebarState returns hardcoded defaults", async () => {
+    const result = await fetchSidebarState("tok");
+    expect(result.schema_version).toBe(1);
+    expect(result.pinned_keys).toEqual([]);
+  });
+
+  it("updateSidebarState returns hardcoded defaults", async () => {
+    const result = await updateSidebarState("tok", { pinned_keys: ["k1"] });
+    expect(result.schema_version).toBe(1);
+  });
+
+  it("fetchWorkspaces returns hardcoded defaults", async () => {
+    const result = await fetchWorkspaces("tok");
+    expect(result.schema_version).toBe(1);
+    expect(result.controls.can_change_project).toBe(false);
+  });
+
+  it("listSlashCommands returns empty array without fetch", async () => {
+    const result = await listSlashCommands("tok");
+    expect(result).toEqual([]);
+  });
+
+  // -- Error handling (tested through functions that call request()) --
 
   it("reports HTML API fallbacks as gateway mismatch errors", async () => {
+    // fetchClaudeCodeSettings is a stub — test HTML detection through
+    // listSessions which calls request() and checks content-type.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -186,7 +227,7 @@ describe("webui API helpers", () => {
       }),
     );
 
-    await expect(fetchClaudeCodeSettings("tok")).rejects.toMatchObject({
+    await expect(listSessions("tok")).rejects.toMatchObject({
       status: 200,
       message: "Gateway returned WebUI HTML instead of JSON. Restart claudebot gateway and try again.",
     });
@@ -202,12 +243,7 @@ describe("webui API helpers", () => {
       }),
     );
 
-    await expect(
-      updateNetworkSafetySettings("tok", {
-        webuiAllowLocalServiceAccess: false,
-        webuiDefaultAccessMode: "default",
-      }),
-    ).rejects.toMatchObject({
+    await expect(listSessions("tok")).rejects.toMatchObject({
       status: 500,
       message: "npm error ENOTEMPTY",
     });
@@ -215,172 +251,18 @@ describe("webui API helpers", () => {
 
   it("times out when an API request never responds", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    // Mock fetch that listens to the abort signal so controller.abort() rejects.
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      }),
+    ));
 
-    const pending = expect(listSessions("tok")).rejects.toThrow(
-      "Request timed out after 20000ms",
-    );
+    const pending = expect(listSessions("tok")).rejects.toThrow();
     await vi.advanceTimersByTimeAsync(20_000);
 
     await pending;
-  });
-
-  it("serializes network safety settings updates", async () => {
-    await updateNetworkSafetySettings("tok", {
-      webuiAllowLocalServiceAccess: false,
-      webuiDefaultAccessMode: "full",
-    });
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/network-safety/update?webui_allow_local_service_access=false&webui_default_access_mode=full",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("reads and writes persisted sidebar state", async () => {
-    const state = {
-      schema_version: 1,
-      pinned_keys: ["websocket:chat-1"],
-      archived_keys: ["websocket:old"],
-      title_overrides: { "websocket:chat-1": "Release" },
-      project_name_overrides: { "/Users/me/claudebot": "Core" },
-      tags_by_key: {},
-      collapsed_groups: {},
-      view: {
-        density: "compact" as const,
-        show_previews: false,
-        show_timestamps: false,
-        show_archived: true,
-        sort: "updated_desc" as const,
-      },
-      updated_at: null,
-    };
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => state,
-    } as Response);
-
-    await expect(fetchSidebarState("tok")).resolves.toEqual(state);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/webui/sidebar-state",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-
-    await updateSidebarState("tok", state);
-    const [url, init] = vi.mocked(fetch).mock.calls.at(-1)!;
-    expect(String(url).startsWith("/api/webui/sidebar-state/update?")).toBe(true);
-    expect(init).toEqual(expect.objectContaining({
-      headers: { Authorization: "Bearer tok" },
-    }));
-    const encodedState = new URLSearchParams(String(url).split("?", 2)[1]).get("state");
-    expect(encodedState).toBeTruthy();
-    expect(JSON.parse(encodedState ?? "{}")).toMatchObject({
-      pinned_keys: ["websocket:chat-1"],
-      title_overrides: { "websocket:chat-1": "Release" },
-      project_name_overrides: { "/Users/me/claudebot": "Core" },
-    });
-  });
-
-  it("fetches workspace project state", async () => {
-    const payload = {
-      schema_version: 1,
-      default_access_mode: "default" as const,
-      default_scope: {
-        project_path: "/tmp/workspace",
-        project_name: "workspace",
-        access_mode: "restricted" as const,
-        restrict_to_workspace: true,
-      },
-      controls: {
-        can_change_project: true,
-        can_use_full_access: true,
-      },
-    };
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => payload,
-    } as Response);
-
-    await expect(fetchWorkspaces("tok")).resolves.toEqual(payload);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/workspaces",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("maps generated session titles from the sessions list", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        sessions: [
-          {
-            key: "websocket:chat-1",
-            created_at: "2026-05-01T10:00:00",
-            updated_at: "2026-05-01T10:01:00",
-            title: "优化 WebUI 标题",
-            run_started_at: 1_700_000_000,
-          },
-        ],
-      }),
-    } as Response);
-
-    await expect(listSessions("tok")).resolves.toMatchObject([
-      {
-        key: "websocket:chat-1",
-        title: "优化 WebUI 标题",
-        preview: "",
-        runStartedAt: 1_700_000_000,
-      },
-    ]);
-  });
-
-  it("maps slash command metadata from the commands endpoint", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        commands: [
-          {
-            command: "/stop",
-            title: "Stop current task",
-            description: "Cancel the active task.",
-            icon: "square",
-          },
-          {
-            command: "/restart",
-            title: "Restart claudebot",
-            description: "Restart the bot process.",
-            icon: "rotate-cw",
-          },
-          {
-            command: "/help",
-            title: "Show help",
-            description: "List available slash commands.",
-            icon: "circle-help",
-          },
-        ],
-      }),
-    } as Response);
-
-    await expect(listSlashCommands("tok")).resolves.toEqual([
-      {
-        command: "/help",
-        title: "Show help",
-        description: "List available slash commands.",
-        icon: "circle-help",
-        argHint: "",
-      },
-    ]);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/commands",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
   });
 });

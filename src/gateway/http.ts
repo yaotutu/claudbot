@@ -1,5 +1,6 @@
 // HTTP API: REST endpoints for sessions, agent files, schedules, media, health, bootstrap.
 
+import { join } from "node:path";
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { AgentFileName } from "../agent/profile.ts";
 
@@ -23,47 +24,57 @@ export async function handleHttp(
     }
 
     if (path === "/webui/bootstrap" && method === "GET") {
-      const sessions = await services.sessions.list();
+      const list = await services.sdkSessions.list("claudebot");
+      const summaries = await Promise.all(
+        list.map(async (s) => {
+          const info = await services.sdkSessions.info(s.sessionId);
+          const mainFile = Bun.file(join(services.paths.sessionsDir, s.sessionId, "main.jsonl"));
+          const messageCount = (await mainFile.exists())
+            ? (await mainFile.text()).split("\n").filter((l) => l.length > 0).length
+            : 0;
+          return {
+            id: s.sessionId,
+            title: info?.customTitle ?? info?.summary ?? info?.firstPrompt ?? "(untitled)",
+            preview: info?.firstPrompt ?? "",
+            updatedAt: new Date(s.mtime).toISOString(),
+            messageCount,
+          };
+        }),
+      );
       const state = await services.runtimeState.get();
       return json(200, {
         config: { gateway: services.config.gateway, claudeCode: { model: services.config.claudeCode.model, permissionMode: services.config.claudeCode.permissionMode } },
         lastActiveSessionId: state.lastActiveSessionId,
-        sessions: sessions.map((s) => ({ id: s.id, title: s.title, preview: s.preview, updatedAt: s.updatedAt, messageCount: s.messages.length })),
+        sessions: summaries,
       });
     }
 
     if (path === "/api/sessions" && method === "GET") {
-      const list = await services.sessions.list();
-      return json(200, list);
-    }
-    if (path === "/api/sessions" && method === "POST") {
-      const body = await safeJson(req) as { title?: string } | null;
-      const session = await services.sessions.create(body?.title || "New chat");
-      return json(200, session);
+      const list = await services.sdkSessions.list("claudebot");
+      return json(200, list.map((s) => ({ id: s.sessionId, mtime: s.mtime })));
     }
 
     const sessionMatch = path.match(/^\/api\/sessions\/([A-Za-z0-9_-]+)(\/.*)?$/);
     if (sessionMatch) {
       const id = sessionMatch[1];
       const sub = sessionMatch[2] || "";
-      const record = await services.sessions.get(id);
-      if (!record && sub === "") {
-        return json(404, { error: "session not found" });
-      }
-      if (sub === "" && method === "GET") return json(200, record);
       if (sub === "" && method === "DELETE") {
-        await services.sessions.delete(id);
+        await services.sdkSessions.remove(id);
         return json(200, { deleted: id });
       }
       if (sub === "" && method === "PATCH") {
         const body = await safeJson(req) as { title?: string } | null;
-        if (!record) return json(404, { error: "session not found" });
-        if (body?.title) record.title = body.title;
-        await services.sessions.save(record);
-        return json(200, record);
+        if (!body?.title) return json(400, { error: "title required" });
+        await services.sdkSessions.rename(id, body.title);
+        return json(200, { id, title: body.title });
       }
       if (sub === "/messages" && method === "GET") {
-        return json(200, record ? record.messages : []);
+        const sessionDir = join(services.paths.sessionsDir, id, "main.jsonl");
+        const file = Bun.file(sessionDir);
+        if (!(await file.exists())) return json(200, []);
+        const { parseJsonlToUIMessages } = await import("../sessions/jsonl-parser.ts");
+        const messages = await parseJsonlToUIMessages(sessionDir);
+        return json(200, messages);
       }
       if (sub === "/activate" && method === "POST") {
         await services.runtimeState.setLastActiveSession(id, "user_open");
@@ -104,13 +115,13 @@ export async function handleHttp(
     }
 
     if (path === "/api/schedules" && method === "GET") {
-      return json(200, await services.scheduler.list());
+      return json(200, await services.storeOps.list());
     }
     const scheduleRunMatch = path.match(/^\/api\/schedules\/([A-Za-z0-9_-]+)\/run-now$/);
     if (scheduleRunMatch && method === "POST") {
       const id = scheduleRunMatch[1];
       try {
-        const run = await services.scheduler.runNow(id);
+        const run = await services.trigger.runNow(id);
         return json(200, run);
       } catch (err) {
         return json(400, { error: err instanceof Error ? err.message : String(err) });

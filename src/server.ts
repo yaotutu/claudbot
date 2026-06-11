@@ -4,16 +4,40 @@ import { join } from "node:path";
 import { buildServices } from "./runtime/services.ts";
 import { handleHttp } from "./gateway/http.ts";
 import { makeWsHandlers, type WsData } from "./gateway/websocket.ts";
-import { resolveRuntimeConfig } from "./config/loader.ts";
+import { formatConfigSource, loadConfig } from "./config/loader.ts";
 import { runtimePaths } from "./config/paths.ts";
+import { appendScheduleResult } from "./scheduler/notify.ts";
 
-const config = await resolveRuntimeConfig({
-  ...(await readOptionalConfig(process.env.CLAUDEBOT_CONFIG)),
-}, { homeEnv: process.env.CLAUDEBOT_HOME || "" });
+const loaded = await loadConfig();
+const config = loaded.config;
 const paths = runtimePaths(config);
-const services = await buildServices({ config, paths });
+const services = await buildServices({ loaded, paths });
+
+// Start the scheduler cron loop.
+services.trigger.start(config.scheduler.tickIntervalMs);
 
 const handlers = makeWsHandlers(services);
+
+// Wire the schedule notifier to real delivery:
+// 1. Append result to last active session's .jsonl (fallback inbox)
+// 2. Broadcast message.appended to all WS connections (reuse existing protocol)
+services.notifier.deliver = async (payload) => {
+  const state = await services.runtimeState.get();
+  const targetId = state.lastActiveSessionId;
+  if (!targetId) return; // no session to deliver to
+  await appendScheduleResult(services.paths.sessionsDir, targetId, payload);
+  handlers.broadcast({
+    type: "message.appended",
+    sessionId: targetId,
+    message: {
+      id: `sched-${payload.scheduleId}-${Date.now()}`,
+      role: "assistant",
+      content: `[定时任务 ${payload.scheduleName}] ${payload.result}`,
+      createdAt: new Date().toISOString(),
+      metadata: { source: "schedule", scheduleId: payload.scheduleId },
+    },
+  });
+};
 
 // Static webui directory (built by `cd webui && bun run build`).
 // Resolved relative to this file so it works in dev and after bundling.
@@ -26,7 +50,7 @@ const server = Bun.serve({
   async fetch(req, srv) {
     const url = new URL(req.url);
     if (url.pathname === "/ws") {
-      const data: WsData = { sessionId: "inbox", services, send: () => {} };
+      const data: WsData = { sessionId: "", services, send: () => {} };
       const ok = (srv as unknown as { upgrade: (r: Request, o: { data: WsData }) => boolean }).upgrade(req, { data });
       if (ok) return undefined;
       return new Response("upgrade required", { status: 426 });
@@ -48,14 +72,25 @@ const server = Bun.serve({
   },
 });
 
-console.log(`claudebot runtime listening on http://${config.gateway.host}:${config.gateway.port}`);
-
-async function readOptionalConfig(path: string | undefined): Promise<Record<string, unknown>> {
-  if (!path) return {};
-  try {
-    return await Bun.file(path).json();
-  } catch {
-    return {};
-  }
+// Startup banner — make it obvious where config came from and where things live.
+const url = `http://${config.gateway.host}:${config.gateway.port}`;
+console.log(`claudebot runtime listening on ${url}`);
+console.log(`  config:  ${formatConfigSource(loaded.source)}`);
+console.log(`  home:    ${config.home}`);
+console.log(`  model:   ${config.claudeCode.model}`);
+if (loaded.source.kind === "defaults") {
+  console.warn(`  ⚠️  No config file found. Set CLAUDEBOT_CONFIG or create ${config.home}/config.json to customize.`);
 }
+
+// Graceful shutdown — stop scheduler and close server.
+process.on("SIGINT", () => {
+  services.trigger.stop();
+  server.stop();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  services.trigger.stop();
+  server.stop();
+  process.exit(0);
+});
 

@@ -7,7 +7,8 @@ import { registerSchedulerTools } from "../src/tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../src/tools/builtin/agent-files.ts";
 import { SchedulerStore } from "../src/scheduler/store.ts";
-import { SchedulerService } from "../src/scheduler/service.ts";
+import { createStoreOps } from "../src/scheduler/store-ops.ts";
+import { createSchedulerTrigger } from "../src/scheduler/trigger.ts";
 import { MemoryStore } from "../src/memory/store.ts";
 import { AgentProfileStore } from "../src/agent/profile.ts";
 import type { ToolContext } from "../src/tools/types.ts";
@@ -23,43 +24,92 @@ function makeCtx(services: unknown, overrides: Partial<ToolContext> = {}): ToolC
   };
 }
 
-describe("built-in scheduler tools", () => {
-  test("schedule_create validates cron and delegates", async () => {
+describe("built-in cron tool", () => {
+  test("cron add (kind=cron) validates and creates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
     const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
-    const service = new SchedulerService(store, async () => "x");
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    registerSchedulerTools(registry, { scheduler: service });
-    const ctx = makeCtx({ scheduler: service });
-    const result = await registry.execute("schedule_create", {
-      name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "m",
-    }, ctx) as { id: string };
+    registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
+    const ctx = makeCtx({});
+    const result = await registry.execute("cron", {
+      action: "add", name: "t", kind: "cron", cronExpr: "* * * * *", timezone: "UTC", message: "m",
+    }, ctx) as { id: string; kind: string };
     expect(result.id.startsWith("sch_")).toBe(true);
+    expect(result.kind).toBe("cron");
   });
 
-  test("schedule_create rejects bad cron", async () => {
+  test("cron add (kind=at) creates one-shot", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
     const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
-    const service = new SchedulerService(store, async () => "x");
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    registerSchedulerTools(registry, { scheduler: service });
-    const ctx = makeCtx({ scheduler: service });
-    await expect(registry.execute("schedule_create", {
-      name: "t", cronExpr: "not a cron", timezone: "UTC", message: "m",
+    registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
+    const ctx = makeCtx({});
+    const at = new Date(Date.now() + 60_000).toISOString();
+    const result = await registry.execute("cron", {
+      action: "add", name: "reminder", kind: "at", at, message: "drink water",
+    }, ctx) as { id: string; kind: string; deleteAfterRun: boolean };
+    expect(result.kind).toBe("at");
+    expect(result.deleteAfterRun).toBe(true);
+  });
+
+  test("cron add rejects bad cron", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "x");
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
+    const ctx = makeCtx({});
+    await expect(registry.execute("cron", {
+      action: "add", name: "t", kind: "cron", cronExpr: "not a cron", timezone: "UTC", message: "m",
     }, ctx)).rejects.toThrow();
   });
 
-  test("schedule_run_now delegates", async () => {
+  test("cron run delegates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
     const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
-    const service = new SchedulerService(store, async () => "hello");
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "hello");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    registerSchedulerTools(registry, { scheduler: service });
-    const ctx = makeCtx({ scheduler: service });
-    const created = await service.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "m" });
-    const run = await registry.execute("schedule_run_now", { id: created.id }, ctx) as { status: string; result: string };
+    registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
+    const ctx = makeCtx({});
+    const created = await storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "m" });
+    const run = await registry.execute("cron", { action: "run", id: created.id }, ctx) as { status: string; result: string };
     expect(run.status).toBe("succeeded");
     expect(run.result).toBe("hello");
+  });
+
+  test("cron list returns all schedules", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "x");
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
+    const ctx = makeCtx({});
+    await storeOps.create({ name: "a", cronExpr: "* * * * *", timezone: "UTC", message: "1" });
+    await storeOps.create({ name: "b", everyMs: 60000, message: "2" });
+    const list = await registry.execute("cron", { action: "list" }, ctx) as unknown[];
+    expect(list).toHaveLength(2);
+  });
+
+  test("cron remove deletes a schedule", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    const trigger = createSchedulerTrigger(store, async () => "x");
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
+    const ctx = makeCtx({});
+    const created = await storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "m" });
+    const result = await registry.execute("cron", { action: "remove", id: created.id }, ctx) as { deleted: string };
+    expect(result.deleted).toBe(created.id);
+    const list = await registry.execute("cron", { action: "list" }, ctx) as unknown[];
+    expect(list).toHaveLength(0);
   });
 });
 

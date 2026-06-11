@@ -25,6 +25,14 @@ type SessionUpdateHandler = (
 ) => void;
 type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
 type ErrorHandler = (error: StreamError) => void;
+type MessageRole = "user" | "assistant" | "system";
+type MessageAppendedHandler = (
+  chatId: string,
+  content: string,
+  role: MessageRole,
+  createdAt: string,
+) => void;
+type SessionRemapHandler = (oldChatId: string, newChatId: string) => void;
 
 interface PendingNewChat {
   resolve: (chatId: string) => void;
@@ -70,10 +78,14 @@ export class ClaudebotClient {
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
+  private messageAppendedHandlers = new Set<MessageAppendedHandler>();
+  private sessionRemapHandlers = new Set<SessionRemapHandler>();
   private chatHandlers = new Map<string, Set<EventHandler>>();
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
   private static readonly PENDING_INBOUND_MAX = 2000;
   private knownChats = new Set<string>();
+  /** Chat IDs created by newChat() that haven't been remapped to a real SDK ID yet. */
+  private pendingChatIds = new Set<string>();
   private runStartedAtByChatId = new Map<string, number>();
   private goalStateByChatId = new Map<string, GoalStateWsPayload>();
   private pendingNewChat: PendingNewChat | null = null;
@@ -87,10 +99,9 @@ export class ClaudebotClient {
   private status_: ConnectionStatus = "idle";
   private readyChatId: string | null = null;
   /**
-   * The claudebot session id the user most recently activated. The server
-   * forwards Claude SDK events with `sessionId` set to the *Claude* session
-   * (a different UUID), so we can't trust that field for routing. We
-   * instead fan agent.* events out to the last attached claudebot session.
+   * The chat the user most recently activated. We use this as the routing
+   * key for streaming events so a stale `sessionId` on a wire frame can't
+   * make deltas land in the wrong thread.
    */
   private currentChatId: string | null = null;
   private intentionallyClosed = false;
@@ -166,6 +177,31 @@ export class ClaudebotClient {
     };
   }
 
+  /**
+   * Subscribe to message.appended events for any chat. The handler is
+   * called with the chatId, full content, role, and createdAt — enough
+   * for the sidebar to update its local session state (preview, updatedAt)
+   * without a server roundtrip.
+   */
+  onMessageAppended(handler: MessageAppendedHandler): Unsubscribe {
+    this.messageAppendedHandlers.add(handler);
+    return () => {
+      this.messageAppendedHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Subscribe to session remap events. Fired when the server assigns a
+   * real SDK session ID that replaces a local placeholder UUID (created
+   * by newChat). Subscribers should update their key mappings.
+   */
+  onSessionRemap(handler: SessionRemapHandler): Unsubscribe {
+    this.sessionRemapHandlers.add(handler);
+    return () => {
+      this.sessionRemapHandlers.delete(handler);
+    };
+  }
+
   getRunStartedAt(chatId: string): number | null {
     const v = this.runStartedAtByChatId.get(chatId);
     return v === undefined ? null : v;
@@ -231,50 +267,23 @@ export class ClaudebotClient {
   }
 
   /**
-   * Ask the server to provision a new chat_id; resolves with the assigned id.
+   * Prepare a new chat context. Returns a local UUID immediately.
    *
-   * Claudebot doesn't have a WS `new_chat` envelope — it has REST POST /api/sessions
-   * that returns a session object, then we attach over WS.
+   * In the jsonl-backed model, sessions are created by the SDK when the first
+   * user message is sent — there is no REST POST /api/sessions. We generate a
+   * local UUID, activate it over WS (so the server clears lastActiveSession),
+   * and return it. The real SDK session UUID is assigned on the first message.
    */
-  newChat(timeoutMs: number = 5_000, _workspaceScope?: unknown): Promise<string> {
-    if (this.pendingNewChat) {
-      return Promise.reject(new Error("newChat already in flight"));
-    }
-    return new Promise<string>(async (resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingNewChat = null;
-        reject(new Error("newChat timed out"));
-      }, timeoutMs);
-      this.pendingNewChat = { resolve, reject, timer };
-      try {
-        const res = await fetch("/api/sessions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title: "" }),
-        });
-        if (!res.ok) throw new Error(`createSession HTTP ${res.status}`);
-        const session = (await res.json()) as { id: string };
-        if (this.pendingNewChat) {
-          clearTimeout(this.pendingNewChat.timer);
-          this.pendingNewChat = null;
-        }
-        this.knownChats.add(session.id);
-        // Activate over WS so subsequent chat events for this session route here.
-        this.queueSend({ type: "session.activate", sessionId: session.id });
-        // Also synthesize a ready event so any pending waiters settle.
-        this.readyChatId = session.id;
-        // Set currentChatId so streaming events arriving before any explicit
-        // attach() (e.g. text_delta from an in-flight turn) still route.
-        this.currentChatId = session.id;
-        resolve(session.id);
-      } catch (e) {
-        if (this.pendingNewChat) {
-          clearTimeout(this.pendingNewChat.timer);
-          this.pendingNewChat = null;
-        }
-        reject(e instanceof Error ? e : new Error(String(e)));
-      }
-    });
+  newChat(_timeoutMs: number = 5_000, _workspaceScope?: unknown): Promise<string> {
+    const chatId = crypto.randomUUID();
+    this.knownChats.add(chatId);
+    this.pendingChatIds.add(chatId);
+    // Activate over WS so the server clears its lastActiveSession — the next
+    // user message will create a fresh SDK session instead of resuming.
+    this.queueSend({ type: "session.activate", sessionId: chatId });
+    this.readyChatId = chatId;
+    this.currentChatId = chatId;
+    return Promise.resolve(chatId);
   }
 
   attach(chatId: string): void {
@@ -335,9 +344,19 @@ export class ClaudebotClient {
   }
 
   private dispatchServerMessage(msg: WsServerMessage): void {
-    // The `sessionId` on agent.* frames is the Claude SDK session, NOT the
-    // claudebot session the user activated. We use `currentChatId` (set by
-    // `attach`/`newChat`) as the routing key for streaming events.
+    // Detect server-assigned session ID and remap from local placeholder.
+    // When the user creates a new chat, newChat() generates a local UUID.
+    // The SDK assigns its own session ID on the first message. This remap
+    // keeps the UI's routing consistent so the sidebar doesn't show two entries.
+    // Guard: only remap if currentChatId is still a pending placeholder —
+    // prevents stale events from an old session corrupting a brand-new chat.
+    const serverSid = ("sessionId" in msg) ? (msg as { sessionId?: string }).sessionId : undefined;
+    if (serverSid && this.currentChatId && serverSid !== this.currentChatId && this.pendingChatIds.has(this.currentChatId)) {
+      this.remapChatId(this.currentChatId, serverSid);
+    }
+
+    // Use `currentChatId` (set by `attach`/`newChat`) as the routing key for
+    // streaming events. After remap, this is the real SDK session ID.
     const rid = this.currentChatId ?? "";
     switch (msg.type) {
       case "session.updated": {
@@ -345,12 +364,30 @@ export class ClaudebotClient {
         return;
       }
       case "message.appended": {
-        this.emitSessionUpdate(msg.sessionId, "thread");
+        // Notify message-appended subscribers (e.g. the sidebar) so they
+        // can update local state for the affected session. We intentionally
+        // do NOT translate this to session.updated — that caused the
+        // sidebar to refetch the full list on every message, which the
+        // browser's per-origin concurrent-request cap then choked on.
+        // The full message content is in the event payload, so subscribers
+        // can update locally without a server roundtrip.
+        this.fireMessageAppended(
+          msg.sessionId,
+          msg.message.content,
+          msg.message.role,
+          msg.message.createdAt,
+        );
         // The user message is added optimistically in the client's send()
         // path, and echoed back here by the server. Don't dispatch the
         // echo as a streaming event — the hook would re-render it as an
         // assistant bubble.
         if (msg.message.role === "user") return;
+        // Regular assistant responses are already delivered via streaming
+        // text_delta events — dispatching them again here as "progress"
+        // causes duplicate content and spurious "Working" trace rows.
+        // Only dispatch non-streaming sources (e.g. scheduled task results
+        // identified by metadata.source).
+        if (!msg.message.metadata?.source) return;
         const inbound: InboundEvent = {
           event: "message",
           chat_id: msg.sessionId,
@@ -481,6 +518,72 @@ export class ClaudebotClient {
   private emitError(error: StreamError): void {
     for (const handler of this.errorHandlers) {
       try { handler(error); } catch { /* best-effort */ }
+    }
+  }
+
+  private fireMessageAppended(
+    chatId: string,
+    content: string,
+    role: MessageRole,
+    createdAt: string,
+  ): void {
+    for (const handler of this.messageAppendedHandlers) {
+      try { handler(chatId, content, role, createdAt); } catch { /* best-effort */ }
+    }
+  }
+
+  /**
+   * Remap all internal state from a local placeholder chatId to the real
+   * SDK-assigned session ID. Moves handlers, pending events, and notifies
+   * subscribers so the UI can update its key mappings.
+   */
+  private remapChatId(oldId: string, newId: string): void {
+    if (oldId === newId) return;
+    // Move chat handlers
+    const oldHandlers = this.chatHandlers.get(oldId);
+    if (oldHandlers) {
+      const existing = this.chatHandlers.get(newId);
+      if (existing) {
+        for (const h of oldHandlers) existing.add(h);
+      } else {
+        this.chatHandlers.set(newId, oldHandlers);
+      }
+      this.chatHandlers.delete(oldId);
+    }
+    // Move pending inbound
+    const oldPending = this.pendingInboundByChat.get(oldId);
+    if (oldPending && oldPending.length > 0) {
+      const newPending = this.pendingInboundByChat.get(newId);
+      if (newPending) {
+        newPending.push(...oldPending);
+      } else {
+        this.pendingInboundByChat.set(newId, oldPending);
+      }
+      this.pendingInboundByChat.delete(oldId);
+    }
+    // Update known chats
+    this.knownChats.delete(oldId);
+    this.knownChats.add(newId);
+    // Clear pending marker — this ID is now a real SDK session
+    this.pendingChatIds.delete(oldId);
+    // Update current/ready references
+    if (this.currentChatId === oldId) this.currentChatId = newId;
+    if (this.readyChatId === oldId) this.readyChatId = newId;
+    // Move run-started tracking
+    const runStarted = this.runStartedAtByChatId.get(oldId);
+    if (runStarted !== undefined) {
+      this.runStartedAtByChatId.set(newId, runStarted);
+      this.runStartedAtByChatId.delete(oldId);
+    }
+    // Move goal state
+    const goalState = this.goalStateByChatId.get(oldId);
+    if (goalState) {
+      this.goalStateByChatId.set(newId, goalState);
+      this.goalStateByChatId.delete(oldId);
+    }
+    // Notify subscribers
+    for (const handler of this.sessionRemapHandlers) {
+      try { handler(oldId, newId); } catch { /* ignore */ }
     }
   }
 
