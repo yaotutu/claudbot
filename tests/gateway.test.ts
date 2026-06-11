@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { buildServices } from "../src/runtime/services.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { runtimePaths } from "../src/config/paths.ts";
@@ -58,6 +59,47 @@ describe("gateway HTTP", () => {
     expect(list.status).toBe(200);
     const arr = await list.json() as { id: string }[];
     expect(arr.find((s) => s.id === "sess-seeded")).toBeTruthy();
+  });
+
+  test("GET /api/sessions returns canonical WebUI session summaries", async () => {
+    const { services, dir } = await makeServices(makeRecordingQueryFactory([]));
+    const store = createClaudebotSessionStore({ sessionsDir: join(dir, "sessions") });
+    const seededId = randomUUID();
+    await store.append({ projectKey: "claudebot", sessionId: seededId }, [
+      { type: "user", uuid: "u1", timestamp: "2026-06-10T09:59:40.000Z", message: { role: "user", content: "hello world" } },
+      { type: "assistant", uuid: "a1", timestamp: "2026-06-10T09:59:45.000Z", message: { role: "assistant", content: "hi" } },
+    ]);
+    await services.sdkSessions.rename(seededId, "hello world");
+
+    const res = await handleHttp(new Request("http://x/api/sessions"), new URL("http://x/api/sessions"), services);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Array<Record<string, unknown>>;
+    const summary = body.find((row) => row.id === seededId);
+
+    expect(summary).toMatchObject({
+      id: seededId,
+      title: "hello world",
+      preview: "hello world",
+      messageCount: 2,
+      status: "persisted",
+    });
+    expect(typeof summary?.createdAt).toBe("string");
+    expect(typeof summary?.updatedAt).toBe("string");
+  });
+
+  test("GET /api/runtime returns read-only runtime info", async () => {
+    const { services, dir } = await makeServices(makeRecordingQueryFactory([]));
+    const res = await handleHttp(new Request("http://x/api/runtime"), new URL("http://x/api/runtime"), services);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+
+    expect(body).toMatchObject({
+      home: dir,
+      workspace: join(dir, "workspace"),
+      gateway: { host: "0.0.0.0", port: 18790 },
+      model: "glm-5.1",
+      permissionMode: "bypassPermissions",
+    });
   });
 
   test("POST /api/sessions/:id/activate updates last active", async () => {
@@ -135,6 +177,35 @@ describe("WebSocket chat.user_message end-to-end (mocked runner)", () => {
 });
 
 describe("runUserTurn", () => {
+  test("emits native run frames and creates a persisted session from a draft", async () => {
+    const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
+    const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
+    const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
+    const factory = makeRecordingQueryFactory([init, text, result]);
+    const { services } = await makeServices(factory);
+
+    const sent: unknown[] = [];
+    const fakeWs = {
+      send: (data: string) => sent.push(JSON.parse(data)),
+      data: { sessionId: "", services, send: (m: unknown) => sent.push(m) },
+    } as unknown as Parameters<typeof import("../src/gateway/websocket.ts").runUserTurn>[0];
+
+    const { runUserTurn } = await import("../src/gateway/websocket.ts");
+    await runUserTurn(fakeWs, services, null, "ping", { draftId: "draft-1" });
+
+    const types = sent.map((m) => (m as { type: string }).type);
+    expect(types).toEqual([
+      "run.started",
+      "session.created",
+      "run.delta",
+      "run.completed",
+      "message.appended",
+    ]);
+    const created = sent.find((m) => (m as { type: string }).type === "session.created") as { draftId?: string; session?: { id?: string; title?: string } } | undefined;
+    expect(created?.draftId).toBe("draft-1");
+    expect(created?.session?.title).toBe("ping");
+  });
+
   test("does not call sessions.save and forwards the runner stream", async () => {
     const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
     const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
@@ -170,10 +241,10 @@ describe("runUserTurn", () => {
 
     expect(saveCalled).toBe(false);
 
-    // The runner stream was forwarded as agent.* frames.
+    // The runner stream is forwarded through the claudebot-native run frames.
     const types = sent.map((m) => (m as { type: string }).type);
-    expect(types).toContain("agent.text_delta");
-    expect(types).toContain("agent.turn_done");
+    expect(types).toContain("run.delta");
+    expect(types).toContain("run.completed");
     // The final assistant message goes out as a single message.appended frame.
     expect(types).toContain("message.appended");
     const appended = sent.find((m) => (m as { type: string }).type === "message.appended") as { type: string; message: { role: string; content: string } } | undefined;

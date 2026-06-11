@@ -2,7 +2,7 @@
 
 import type { ServerWebSocket } from "bun";
 import type { ServiceContainer } from "../runtime/services.ts";
-import type { WsClientMessage, WsServerMessage } from "./protocol.ts";
+import type { SessionSummaryWire, WsClientMessage, WsServerMessage } from "./protocol.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
 import { sessionExists } from "../sessions/adapter.ts";
 
@@ -74,7 +74,14 @@ async function handleClientMessage(
       const effectiveId = exists ? msg.sessionId : "";
       await services.runtimeState.setLastActiveSession(effectiveId, "user_switch");
       ws.data.sessionId = effectiveId;
-      send(ws, { type: "session.updated", sessionId: effectiveId });
+      send(ws, { type: "session.activated", sessionId: effectiveId || null });
+      return;
+    }
+    case "chat.send": {
+      const explicitId = msg.sessionId || ws.data.sessionId || null;
+      const state = explicitId ? null : await services.runtimeState.get();
+      const sessionId = explicitId || state?.lastActiveSessionId || null;
+      await runUserTurn(ws, services, sessionId, msg.content, { draftId: msg.draftId });
       return;
     }
     case "chat.user_message": {
@@ -97,8 +104,12 @@ export async function runUserTurn(
   services: ServiceContainer,
   sessionId: string | null,
   content: string,
+  options: { draftId?: string } = {},
 ): Promise<void> {
   const send = (m: WsServerMessage) => sendTo(ws, m);
+  const runId = crypto.randomUUID();
+  const initialRouteId = sessionId ?? options.draftId ?? "pending";
+  send({ type: "run.started", sessionId: initialRouteId, runId });
 
   // Resolve session: either caller-supplied, last active, or null (let SDK create).
   // Validate that the session actually exists on disk — the adapter only has
@@ -135,6 +146,7 @@ export async function runUserTurn(
   let collected = "";
   let turnErrored = false;
   let finalResult = "";
+  let sessionCreated = false;
 
   try {
     for await (const ev of runner.run({ prompt: content, resumeSessionId: sdkSessionId })) {
@@ -143,7 +155,18 @@ export async function runUserTurn(
         send({ type: "agent.status", status: "mirror_error", sessionId: ev.sessionId });
         continue;
       }
-      forward(send, ev);
+      if (ev.sessionId && ev.sessionId !== lastSessionId) {
+        lastSessionId = ev.sessionId;
+      }
+      if (!sdkSessionId && !sessionCreated && lastSessionId && lastSessionId !== "pending") {
+        sessionCreated = true;
+        send({
+          type: "session.created",
+          draftId: options.draftId,
+          session: draftSessionSummary(lastSessionId, content),
+        });
+      }
+      forwardNative(send, ev, runId, lastSessionId ?? initialRouteId);
       if (ev.type === "text_delta") collected += ev.text;
       if (ev.type === "turn_done") {
         finalResult = ev.result;
@@ -173,12 +196,21 @@ export async function runUserTurn(
     } catch { /* non-critical */ }
   }
 
+  if (!sdkSessionId && !sessionCreated && lastSessionId) {
+    send({
+      type: "session.created",
+      draftId: options.draftId,
+      session: draftSessionSummary(lastSessionId, content),
+    });
+  }
+
   // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
   // beat to flush before we ack the WebUI.
   await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
 
   const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
   const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
+  send({ type: "run.completed", sessionId: activeSdkId, runId, isError: turnErrored, result: finalResult });
   send({
     type: "message.appended",
     sessionId: activeSdkId,
@@ -190,6 +222,19 @@ export async function runUserTurn(
       metadata: turnErrored ? { error: true } : {},
     },
   });
+}
+
+function draftSessionSummary(sessionId: string, firstMessage: string): SessionSummaryWire {
+  const now = new Date().toISOString();
+  return {
+    id: sessionId,
+    title: firstMessage.slice(0, 60) || "New chat",
+    preview: firstMessage,
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 1,
+    status: "persisted",
+  };
 }
 
 function sendTo(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {
@@ -205,5 +250,29 @@ function forward(send: (m: WsServerMessage) => void, ev: NormalizedEvent): void 
     case "status": send({ type: "agent.status", status: ev.status, sessionId: ev.sessionId }); break;
     case "turn_done": send({ type: "agent.turn_done", sessionId: ev.sessionId, isError: ev.isError, result: ev.result, totalCostUsd: ev.totalCostUsd }); break;
     case "error": send({ type: "agent.error", message: ev.message, sessionId: ev.sessionId }); break;
+  }
+}
+
+function forwardNative(send: (m: WsServerMessage) => void, ev: NormalizedEvent, runId: string, fallbackSessionId: string): void {
+  const sessionId = ev.sessionId || fallbackSessionId;
+  switch (ev.type) {
+    case "text_delta":
+      send({ type: "run.delta", sessionId, runId, text: ev.text });
+      break;
+    case "thinking_delta":
+      send({ type: "run.thinking", sessionId, runId, text: ev.thinking });
+      break;
+    case "tool_start":
+      send({ type: "run.tool", sessionId, runId, tool: { phase: "start", id: ev.id, name: ev.name, input: ev.input } });
+      break;
+    case "tool_result":
+      send({ type: "run.tool", sessionId, runId, tool: { phase: ev.isError ? "error" : "end", id: ev.id, output: ev.output, isError: ev.isError } });
+      break;
+    case "error":
+      send({ type: "run.error", sessionId, runId, message: ev.message });
+      break;
+    case "status":
+    case "turn_done":
+      break;
   }
 }

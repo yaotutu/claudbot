@@ -11,7 +11,7 @@
     "dev:server": "bun run --watch src/server.ts",
     "dev:webui": "cd webui && bun run dev",
     "start": "bun run src/server.ts",
-    "test": "bun test",
+    "test": "bun test ./tests/*.test.ts ./src/**/*.test.ts --timeout 30000",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {

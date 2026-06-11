@@ -24,34 +24,32 @@ export async function handleHttp(
     }
 
     if (path === "/webui/bootstrap" && method === "GET") {
-      const list = await services.sdkSessions.list("claudebot");
-      const summaries = await Promise.all(
-        list.map(async (s) => {
-          const info = await services.sdkSessions.info(s.sessionId);
-          const mainFile = Bun.file(join(services.paths.sessionsDir, s.sessionId, "main.jsonl"));
-          const messageCount = (await mainFile.exists())
-            ? (await mainFile.text()).split("\n").filter((l) => l.length > 0).length
-            : 0;
-          return {
-            id: s.sessionId,
-            title: info?.customTitle ?? info?.summary ?? info?.firstPrompt ?? "(untitled)",
-            preview: info?.firstPrompt ?? "",
-            updatedAt: new Date(s.mtime).toISOString(),
-            messageCount,
-          };
-        }),
-      );
+      const summaries = await listSessionSummaries(services);
       const state = await services.runtimeState.get();
       return json(200, {
-        config: { gateway: services.config.gateway, claudeCode: { model: services.config.claudeCode.model, permissionMode: services.config.claudeCode.permissionMode } },
+        config: {
+          gateway: services.config.gateway,
+          claudeCode: {
+            model: services.config.claudeCode.model,
+            permissionMode: services.config.claudeCode.permissionMode,
+          },
+          workspace: { path: services.paths.workspace },
+          home: services.paths.home,
+        },
+        runtime: runtimeInfo(services),
+        model_name: services.config.claudeCode.model,
+        ws_path: "/ws",
         lastActiveSessionId: state.lastActiveSessionId,
         sessions: summaries,
       });
     }
 
+    if (path === "/api/runtime" && method === "GET") {
+      return json(200, runtimeInfo(services));
+    }
+
     if (path === "/api/sessions" && method === "GET") {
-      const list = await services.sdkSessions.list("claudebot");
-      return json(200, list.map((s) => ({ id: s.sessionId, mtime: s.mtime })));
+      return json(200, await listSessionSummaries(services));
     }
 
     const sessionMatch = path.match(/^\/api\/sessions\/([A-Za-z0-9_-]+)(\/.*)?$/);
@@ -141,6 +139,87 @@ export async function handleHttp(
   } catch (err) {
     return json(500, { error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+type SessionLineInfo = {
+  messageCount: number;
+  firstTimestamp: string | null;
+  firstUserText: string;
+};
+
+function runtimeInfo(services: ServiceContainer) {
+  return {
+    home: services.paths.home,
+    workspace: services.paths.workspace,
+    gateway: services.config.gateway,
+    model: services.config.claudeCode.model,
+    permissionMode: services.config.claudeCode.permissionMode,
+  };
+}
+
+async function listSessionSummaries(services: ServiceContainer) {
+  const list = await services.sdkSessions.list("claudebot");
+  return Promise.all(list.map((s) => buildSessionSummary(services, s.sessionId, s.mtime)));
+}
+
+async function buildSessionSummary(services: ServiceContainer, sessionId: string, mtime: number) {
+  const info = await services.sdkSessions.info(sessionId);
+  const mainFile = Bun.file(join(services.paths.sessionsDir, sessionId, "main.jsonl"));
+  const text = await mainFile.exists() ? await mainFile.text() : "";
+  const lineInfo = summarizeSessionLines(text);
+  const firstPrompt = info?.firstPrompt ?? lineInfo.firstUserText;
+  const title = info?.customTitle ?? info?.summary ?? firstPrompt ?? "New chat";
+  return {
+    id: sessionId,
+    title: title || "New chat",
+    preview: firstPrompt || "",
+    createdAt: lineInfo.firstTimestamp,
+    updatedAt: new Date(mtime).toISOString(),
+    messageCount: lineInfo.messageCount,
+    status: "persisted" as const,
+  };
+}
+
+function summarizeSessionLines(text: string): SessionLineInfo {
+  const out: SessionLineInfo = { messageCount: 0, firstTimestamp: null, firstUserText: "" };
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(entry)) continue;
+    const type = typeof entry.type === "string" ? entry.type : "";
+    if (type !== "user" && type !== "assistant" && type !== "system") continue;
+    out.messageCount += 1;
+    if (!out.firstTimestamp && typeof entry.timestamp === "string") {
+      out.firstTimestamp = entry.timestamp;
+    }
+    if (!out.firstUserText && type === "user" && isRecord(entry.message)) {
+      out.firstUserText = flattenWireContent(entry.message.content);
+    }
+  }
+  return out;
+}
+
+function flattenWireContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (!isRecord(block)) return "";
+      if (block.type === "text" && typeof block.text === "string") return block.text;
+      return "";
+    })
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function isAgentFile(name: string): name is AgentFileName {
