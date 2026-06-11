@@ -9,6 +9,8 @@ import type { ScheduleRecord, ScheduleRunRecord } from "./types.ts";
 
 export type ScheduleExecutor = (schedule: ScheduleRecord, run: ScheduleRunRecord) => Promise<string>;
 
+const STALE_RUNNING_MS = 2 * 60 * 60 * 1000;
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -22,6 +24,7 @@ async function runSchedule(
   scheduleId: string,
   store: SchedulerStore,
   executor: ScheduleExecutor,
+  activeRuns: Set<string>,
 ): Promise<ScheduleRunRecord> {
   const start = now();
   const run: ScheduleRunRecord = {
@@ -34,6 +37,13 @@ async function runSchedule(
     error: "",
   };
 
+  if (activeRuns.has(scheduleId)) {
+    run.status = "skipped_running";
+    run.finishedAt = now();
+    await recordSkippedRun(store, scheduleId, run, "already running");
+    return run;
+  }
+
   // Read fresh from store
   const schedules = await store.listSchedules();
   const schedule = schedules.find((s) => s.id === scheduleId);
@@ -45,71 +55,119 @@ async function runSchedule(
     return run;
   }
 
-  if (schedule.state.running) {
+  if (schedule.state.running && !isStaleRunning(schedule)) {
     run.status = "skipped_running";
     run.finishedAt = now();
-    await store.appendRun(run);
+    await recordSkippedRun(store, scheduleId, run, "already running");
     return run;
   }
 
-  // Lock
-  schedule.state.running = true;
-  await store.saveSchedules(schedules);
-  await store.appendRun(run);
-
-  try {
-    run.result = await executor(schedule, run);
-    run.status = "succeeded";
-    schedule.state.lastStatus = "succeeded";
-    schedule.state.lastError = null;
-  } catch (error) {
-    run.error = error instanceof Error ? error.message : String(error);
-    run.status = "failed";
-    schedule.state.lastStatus = "failed";
-    schedule.state.lastError = run.error;
-  } finally {
-    run.finishedAt = now();
+  if (schedule.state.running) {
     schedule.state.running = false;
-    schedule.state.lastRunAt = start;
-    schedule.state.runCount += 1;
-    schedule.updatedAt = now();
+    schedule.state.runningStartedAt = null;
+    schedule.state.lastSkippedReason = "cleared stale running marker";
+  }
 
-    if (schedule.deleteAfterRun) {
-      // One-shot schedule: remove after execution
-      const remaining = schedules.filter((s) => s.id !== scheduleId);
-      await store.saveSchedules(remaining);
-    } else {
-      schedule.state.nextRunAt = computeNextRunAtFromKind(schedule);
-      await store.saveSchedules(schedules);
+  // Lock
+  activeRuns.add(scheduleId);
+  try {
+    schedule.state.running = true;
+    schedule.state.runningStartedAt = start;
+    schedule.state.lastSkippedReason = null;
+    await store.saveSchedules(schedules);
+    await store.appendRun(run);
+
+    try {
+      run.result = await executor(schedule, run);
+      run.status = "succeeded";
+      schedule.state.lastStatus = "succeeded";
+      schedule.state.lastError = null;
+    } catch (error) {
+      run.error = error instanceof Error ? error.message : String(error);
+      run.status = "failed";
+      schedule.state.lastStatus = "failed";
+      schedule.state.lastError = run.error;
+    } finally {
+      run.finishedAt = now();
+      schedule.state.running = false;
+      schedule.state.runningStartedAt = null;
+      schedule.state.lastRunAt = start;
+      schedule.state.runCount += 1;
+      schedule.state.lastSkippedReason = null;
+      schedule.updatedAt = now();
+
+      if (schedule.deleteAfterRun) {
+        // One-shot schedule: remove after execution
+        const remaining = schedules.filter((s) => s.id !== scheduleId);
+        await store.saveSchedules(remaining);
+      } else {
+        schedule.state.nextRunAt = computeNextRunAtFromKind(schedule);
+        await store.saveSchedules(schedules);
+      }
+      await store.updateRun(run);
     }
-    await store.updateRun(run);
+  } finally {
+    activeRuns.delete(scheduleId);
   }
   return run;
 }
 
+async function recordSkippedRun(
+  store: SchedulerStore,
+  scheduleId: string,
+  run: ScheduleRunRecord,
+  reason: string,
+): Promise<void> {
+  const schedules = await store.listSchedules();
+  const schedule = schedules.find((s) => s.id === scheduleId);
+  if (schedule) {
+    schedule.state.lastStatus = "skipped_running";
+    schedule.state.lastSkippedReason = reason;
+    schedule.updatedAt = now();
+    await store.saveSchedules(schedules);
+  }
+  await store.appendRun(run);
+}
+
+function isStaleRunning(schedule: ScheduleRecord): boolean {
+  if (!schedule.state.running) return false;
+  if (!schedule.state.runningStartedAt) return true;
+  const startedAt = new Date(schedule.state.runningStartedAt).getTime();
+  if (!Number.isFinite(startedAt)) return true;
+  return Date.now() - startedAt > STALE_RUNNING_MS;
+}
+
 export function createSchedulerTrigger(store: SchedulerStore, executor: ScheduleExecutor) {
   let intervalId: ReturnType<typeof setInterval> | undefined;
+  let tickRunning = false;
+  const activeRuns = new Set<string>();
 
   return {
     /** Run a specific schedule by id immediately. */
     async runNow(id: string): Promise<ScheduleRunRecord> {
-      return runSchedule(id, store, executor);
+      return runSchedule(id, store, executor, activeRuns);
     },
 
     /** Scan for all due schedules and execute them in parallel. */
     async tick(at: Date = new Date()): Promise<ScheduleRunRecord[]> {
-      const schedules = await store.listSchedules();
-      const due = schedules.filter(
-        (s) => s.enabled && new Date(s.state.nextRunAt).getTime() <= at.getTime(),
-      );
-      if (due.length === 0) return [];
+      if (tickRunning) return [];
+      tickRunning = true;
+      try {
+        const schedules = await store.listSchedules();
+        const due = schedules.filter(
+          (s) => s.enabled && new Date(s.state.nextRunAt).getTime() <= at.getTime(),
+        );
+        if (due.length === 0) return [];
 
-      const results = await Promise.allSettled(
-        due.map((s) => runSchedule(s.id, store, executor)),
-      );
-      return results
-        .filter((r): r is PromiseFulfilledResult<ScheduleRunRecord> => r.status === "fulfilled")
-        .map((r) => r.value);
+        const results = await Promise.allSettled(
+          due.map((s) => runSchedule(s.id, store, executor, activeRuns)),
+        );
+        return results
+          .filter((r): r is PromiseFulfilledResult<ScheduleRunRecord> => r.status === "fulfilled")
+          .map((r) => r.value);
+      } finally {
+        tickRunning = false;
+      }
     },
 
     /** Start the cron loop. Periodically calls tick(). */

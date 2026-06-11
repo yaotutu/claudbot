@@ -59,7 +59,7 @@ describe("App native layout", () => {
 
     expect((await screen.findAllByText("hello")).length).toBeGreaterThan(0);
     expect(screen.getByText("hello preview")).toBeInTheDocument();
-    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(await screen.findByText("Connected")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("运行状态")).toBeInTheDocument();

@@ -7,7 +7,6 @@ import { join } from "node:path";
 import type { RuntimeConfig } from "../config/schema.ts";
 import { loadConfig, type LoadedConfig } from "../config/loader.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
-import { SessionStore } from "../sessions/store.ts";
 import { createClaudebotSessionStore } from "../sessions/adapter.ts";
 import { RuntimeStateStore } from "./state.ts";
 import { AgentProfileStore } from "../agent/profile.ts";
@@ -36,7 +35,6 @@ export type SdkSessionsFacade = {
 export type ServiceContainer = {
   config: RuntimeConfig;
   paths: RuntimePaths;
-  sessions: SessionStore;
   runtimeState: RuntimeStateStore;
   profile: AgentProfileStore;
   memory: MemoryStore;
@@ -67,7 +65,6 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
         : await loadConfig());
   const config = loaded.config;
   const paths = deps.paths ?? runtimePaths(config);
-  const sessions = new SessionStore(paths.sessionsDir);
   const runtimeState = new RuntimeStateStore(paths.runtimeStateFile);
   const profile = new AgentProfileStore({
     userFile: paths.userFile,
@@ -163,7 +160,6 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   return {
     config,
     paths,
-    sessions,
     runtimeState,
     profile,
     memory,

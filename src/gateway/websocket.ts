@@ -31,13 +31,13 @@ export function makeWsHandlers(services: ServiceContainer) {
       try {
         msg = JSON.parse(text) as WsClientMessage;
       } catch {
-        send(ws, { type: "agent.error", message: "invalid JSON" });
+        send(ws, { type: "run.error", message: "invalid JSON" });
         return;
       }
       handleClientMessage(ws, msg, services).catch((err) => {
         const detail = err instanceof Error ? err.message : String(err);
         console.error("[ws] handleClientMessage failed:", detail);
-        try { send(ws, { type: "agent.error", message: `internal: ${detail}` }); } catch { /* ignore */ }
+        try { send(ws, { type: "run.error", message: `internal: ${detail}` }); } catch { /* ignore */ }
       });
     },
     close(ws: ServerWebSocket<WsData>) {
@@ -152,7 +152,7 @@ export async function runUserTurn(
     for await (const ev of runner.run({ prompt: content, resumeSessionId: sdkSessionId })) {
       // Surface mirror_error so WebUI status reflects SDK health
       if (ev.type === "error" && ev.message.includes("mirror_error")) {
-        send({ type: "agent.status", status: "mirror_error", sessionId: ev.sessionId });
+        send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
         continue;
       }
       if (ev.sessionId && ev.sessionId !== lastSessionId) {
@@ -239,18 +239,6 @@ function draftSessionSummary(sessionId: string, firstMessage: string): SessionSu
 
 function sendTo(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {
   try { ws.send(JSON.stringify(msg)); } catch { /* closed */ }
-}
-
-function forward(send: (m: WsServerMessage) => void, ev: NormalizedEvent): void {
-  switch (ev.type) {
-    case "text_delta": send({ type: "agent.text_delta", text: ev.text, sessionId: ev.sessionId }); break;
-    case "thinking_delta": send({ type: "agent.thinking_delta", thinking: ev.thinking, sessionId: ev.sessionId }); break;
-    case "tool_start": send({ type: "agent.tool_start", id: ev.id, name: ev.name, input: ev.input, sessionId: ev.sessionId }); break;
-    case "tool_result": send({ type: "agent.tool_result", id: ev.id, output: ev.output, isError: ev.isError, sessionId: ev.sessionId }); break;
-    case "status": send({ type: "agent.status", status: ev.status, sessionId: ev.sessionId }); break;
-    case "turn_done": send({ type: "agent.turn_done", sessionId: ev.sessionId, isError: ev.isError, result: ev.result, totalCostUsd: ev.totalCostUsd }); break;
-    case "error": send({ type: "agent.error", message: ev.message, sessionId: ev.sessionId }); break;
-  }
 }
 
 function forwardNative(send: (m: WsServerMessage) => void, ev: NormalizedEvent, runId: string, fallbackSessionId: string): void {

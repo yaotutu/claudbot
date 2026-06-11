@@ -26,6 +26,8 @@ describe("scheduler store-ops (CRUD)", () => {
     expect(schedule.kind).toBe("cron");
     expect(schedule.deleteAfterRun).toBe(false);
     expect(schedule.state.nextRunAt).toBeTruthy();
+    expect(schedule.state.runningStartedAt).toBeNull();
+    expect(schedule.state.lastSkippedReason).toBeNull();
   });
 
   test("creates 'at' one-shot schedule", async () => {
@@ -103,12 +105,69 @@ describe("scheduler trigger (execution)", () => {
     const schedules = await store.listSchedules();
     const target = schedules.find((s) => s.id === schedule.id)!;
     target.state.running = true;
+    target.state.runningStartedAt = new Date().toISOString();
     await store.saveSchedules(schedules);
     const run = await trigger.runNow(schedule.id);
     expect(run.status).toBe("skipped_running");
     const runs = await store.listRuns();
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("skipped_running");
+    const after = (await store.listSchedules()).find((s) => s.id === schedule.id)!;
+    expect(after.state.lastSkippedReason).toBe("already running");
+  });
+
+  test("run now clears stale running marker and executes schedule", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    let calls = 0;
+    const trigger = createSchedulerTrigger(store, async () => { calls++; return "recovered"; });
+    const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
+    const schedules = await store.listSchedules();
+    const target = schedules.find((s) => s.id === schedule.id)!;
+    target.state.running = true;
+    target.state.runningStartedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    await store.saveSchedules(schedules);
+
+    const run = await trigger.runNow(schedule.id);
+
+    expect(run.status).toBe("succeeded");
+    expect(run.result).toBe("recovered");
+    expect(calls).toBe(1);
+    const after = (await store.listSchedules()).find((s) => s.id === schedule.id)!;
+    expect(after.state.running).toBe(false);
+    expect(after.state.runningStartedAt).toBeNull();
+    expect(after.state.lastSkippedReason).toBeNull();
+  });
+
+  test("tick skips re-entry while a previous tick is still running", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
+    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const storeOps = createStoreOps(store);
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const trigger = createSchedulerTrigger(store, async () => {
+      calls++;
+      await blocker;
+      return "ok";
+    });
+    const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
+    const schedules = await store.listSchedules();
+    schedules[0].state.nextRunAt = new Date(Date.now() - 60_000).toISOString();
+    await store.saveSchedules(schedules);
+
+    const firstTick = trigger.tick(new Date());
+    await new Promise((r) => setTimeout(r, 10));
+    const secondTick = await trigger.tick(new Date());
+    release();
+    await firstTick;
+
+    expect(secondTick).toEqual([]);
+    expect(calls).toBe(1);
+    const runs = await store.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].scheduleId).toBe(schedule.id);
   });
 
   test("executor failure is persisted without retry", async () => {
@@ -125,6 +184,7 @@ describe("scheduler trigger (execution)", () => {
     expect(target.state.lastStatus).toBe("failed");
     expect(target.state.lastError).toBe("boom");
     expect(target.state.runCount).toBe(1);
+    expect(target.state.runningStartedAt).toBeNull();
   });
 
   test("due tick runs due schedules and advances nextRunAt", async () => {

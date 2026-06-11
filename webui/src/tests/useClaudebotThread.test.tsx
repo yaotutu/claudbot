@@ -20,6 +20,7 @@ function makeClient() {
     emit: (frame: ServerFrame) => {
       for (const handler of handlers) handler(frame);
     },
+    frameHandlerCount: () => handlers.size,
     emitStatus: (status: string) => {
       for (const handler of statusHandlers) handler(status);
     },
@@ -137,10 +138,14 @@ describe("useClaudebotThread", () => {
     const fetchMessages = vi.fn(async () => []);
     const { result } = renderHook(() => useClaudebotThread({
       sessionId: "s1",
-      sessionStatus: "persisted",
+      sessionStatus: "draft",
       client,
       fetchMessages,
     }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     act(() => {
       client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
@@ -151,5 +156,30 @@ describe("useClaudebotThread", () => {
       client.emitStatus("closed");
     });
     expect(result.current.streaming).toBe(false);
+  });
+
+  it("shows run.error as a system message and stops streaming", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => []);
+    const { result } = renderHook(() => useClaudebotThread({
+      sessionId: "s1",
+      sessionStatus: "draft",
+      client,
+      fetchMessages,
+    }));
+
+    await waitFor(() => expect(client.frameHandlerCount()).toBe(1));
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
+      client.emit({ type: "run.error", sessionId: "s1", runId: "r1", message: "mirror_error: flush failed" });
+    });
+
+    expect(result.current.streaming).toBe(false);
+    expect(result.current.messages.at(-1)).toMatchObject({
+      role: "system",
+      content: "mirror_error: flush failed",
+      metadata: { error: true, runId: "r1" },
+    });
   });
 });

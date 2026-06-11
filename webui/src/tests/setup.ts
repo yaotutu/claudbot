@@ -1,8 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach } from "vitest";
 
-import i18n from "@/i18n";
-
 function createTestStorage(): Storage {
   const store = new Map<string, string>();
   return {
@@ -53,9 +51,7 @@ if (!("randomUUID" in globalThis.crypto)) {
   });
 }
 
-beforeEach(async () => {
-  await i18n.changeLanguage("en");
+beforeEach(() => {
   document.documentElement.lang = "en";
   document.title = "claudebot";
-  localStorage.setItem("claudebot.locale", "en");
 });
