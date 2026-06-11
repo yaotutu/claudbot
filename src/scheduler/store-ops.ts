@@ -92,6 +92,8 @@ export function createStoreOps(store: SchedulerStore) {
           lastError: null,
           runCount: 0,
           running: false,
+          runningStartedAt: null,
+          lastSkippedReason: null,
         },
         createdAt: time,
         updatedAt: time,

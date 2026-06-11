@@ -30,6 +30,13 @@ async function makeServices(queryFactory: QueryFactory) {
 }
 
 describe("gateway HTTP", () => {
+  test("service container exposes SDK sessions but not legacy session store", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+
+    expect("sdkSessions" in services).toBe(true);
+    expect("sessions" in services).toBe(false);
+  });
+
   test("GET /health returns ok", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
     const res = await handleHttp(new Request("http://x/health"), new URL("http://x/health"), services);
@@ -206,22 +213,12 @@ describe("runUserTurn", () => {
     expect(created?.session?.title).toBe("ping");
   });
 
-  test("does not call sessions.save and forwards the runner stream", async () => {
+  test("forwards only native run frames for the runner stream", async () => {
     const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
     const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
     const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
     const factory = makeRecordingQueryFactory([init, text, result]);
     const { services } = await makeServices(factory);
-
-    // Spy on the only write API on services.sessions — runUserTurn must not
-    // persist anything through it. Conversation history is the SDK's job via
-    // the jsonl sessionStore adapter.
-    const origSave = services.sessions.save.bind(services.sessions);
-    let saveCalled = false;
-    (services.sessions as unknown as { save: (...args: unknown[]) => Promise<void> }).save = async (...args: unknown[]) => {
-      saveCalled = true;
-      return origSave(...(args as Parameters<typeof origSave>));
-    };
 
     // Stub WebSocket-like object: runUserTurn writes to ws.data.sessionId
     // after the run, so the fake needs both `send` and a mutable `data`.
@@ -239,10 +236,9 @@ describe("runUserTurn", () => {
       "hi",
     );
 
-    expect(saveCalled).toBe(false);
-
     // The runner stream is forwarded through the claudebot-native run frames.
     const types = sent.map((m) => (m as { type: string }).type);
+    expect(types.every((type) => !type.startsWith("agent."))).toBe(true);
     expect(types).toContain("run.delta");
     expect(types).toContain("run.completed");
     // The final assistant message goes out as a single message.appended frame.

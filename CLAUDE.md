@@ -70,7 +70,6 @@ WebUI ──HTTP/WS──▶ src/server.ts (Bun.serve)
                                    ▼
                    src/runtime/services.ts (ServiceContainer)
                        ├─ sessionStore  (ClaudebotSessionStore — SDK SessionStore adapter)
-                       ├─ sessions      (SessionStore — metadata-only, legacy)
                        ├─ runtimeState  (lastActiveSessionId — SDK session UUID)
                        ├─ profile       (user.md / soul.md / memory.json)
                        ├─ memory        (MemoryStore)
@@ -125,7 +124,7 @@ Notes on the implementation:
 
 - **Message count for the session list** (`/webui/bootstrap`) is computed by counting non-empty lines in `main.jsonl`. Don't read the file into memory; `Bun.file(...).text().split("\n")` is fine for current sizes but revisit if session transcripts grow large.
 - **`MIRROR_FLUSH_SETTLE_MS = 50`** in `src/gateway/websocket.ts` is a settle delay between `turn_done` and the WS ack, so the adapter mirror has time to flush under `sessionStoreFlush: 'batched'`. If the SDK exposes a flush signal, replace this with that.
-- **`SessionStore` class (`src/sessions/store.ts`) is `@deprecated`.** It persists only metadata (`id`, `title`, `preview`, `claudeSessionId`, timestamps) and is kept around because `ServiceContainer.sessions` still exports it and `tests/gateway.test.ts` spies on it. Delete it together with those two consumers when ready.
+- The old metadata-only `SessionStore` has been removed. Do not reintroduce an app-layer session store; use `sdkSessions` and the SDK `SessionStore` adapter instead.
 
 ## WebUI architecture
 

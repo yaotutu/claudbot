@@ -7,7 +7,6 @@
     <meta
       name="description"
       content="claudebot web UI — chat with your claudebot workspace."
-      data-i18n-meta="description"
     />
     <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)" />
@@ -90,86 +89,6 @@
         } catch {}
       })();
     </script>
-    <script>
-      (function () {
-        var localeKey = "claudebot.locale";
-        var copy = {
-          en: {
-            boot: "Loading claudebot…",
-            description: "claudebot web UI — chat with your claudebot workspace."
-          },
-          "zh-CN": {
-            boot: "正在加载 claudebot…",
-            description: "claudebot Web UI —— 与你的 claudebot 工作区对话。"
-          },
-          "zh-TW": {
-            boot: "正在載入 claudebot…",
-            description: "claudebot Web UI —— 與你的 claudebot 工作區對話。"
-          },
-          fr: {
-            boot: "Chargement de claudebot…",
-            description: "Interface web claudebot — discutez avec votre espace de travail claudebot."
-          },
-          ja: {
-            boot: "claudebot を読み込み中…",
-            description: "claudebot Web UI — claudebot ワークスペースと会話します。"
-          },
-          ko: {
-            boot: "claudebot 불러오는 중…",
-            description: "claudebot 웹 UI — claudebot 작업공간과 대화하세요."
-          },
-          es: {
-            boot: "Cargando claudebot…",
-            description: "Interfaz web de claudebot: conversa con tu espacio de trabajo de claudebot."
-          },
-          vi: {
-            boot: "Đang tải claudebot…",
-            description: "Giao diện web claudebot — trò chuyện với workspace claudebot của bạn."
-          },
-          id: {
-            boot: "Memuat claudebot…",
-            description: "UI web claudebot — ngobrol dengan workspace claudebot Anda."
-          }
-        };
-
-        function normalizeLocale(input) {
-          if (!input) return "en";
-          var raw = String(input).trim();
-          if (!raw) return "en";
-          if (copy[raw]) return raw;
-          var lower = raw.toLowerCase();
-          if (lower === "zh" || lower.indexOf("zh-cn") === 0 || lower.indexOf("zh-sg") === 0) {
-            return "zh-CN";
-          }
-          if (
-            lower.indexOf("zh-tw") === 0 ||
-            lower.indexOf("zh-hk") === 0 ||
-            lower.indexOf("zh-mo") === 0 ||
-            lower.indexOf("zh-hant") === 0
-          ) {
-            return "zh-TW";
-          }
-          var base = lower.split("-")[0];
-          return copy[base] ? base : "en";
-        }
-
-        try {
-          var stored = localStorage.getItem(localeKey);
-          var detected =
-            stored ||
-            (navigator.languages && navigator.languages[0]) ||
-            navigator.language ||
-            "en";
-          var locale = normalizeLocale(detected);
-          var localized = copy[locale] || copy.en;
-          document.documentElement.lang = locale;
-          var description = document.querySelector('[data-i18n-meta=\"description\"]');
-          if (description) description.setAttribute("content", localized.description);
-          var boot = document.querySelector("[data-boot-copy]");
-          if (boot) boot.textContent = localized.boot;
-        } catch {}
-      })();
-    </script>
     <title>claudebot</title>
   </head>
   <body class="bg-background text-foreground antialiased">
@@ -177,7 +96,7 @@
       <div class="boot-splash">
         <div class="boot-splash-inner">
           <span class="boot-dot" aria-hidden="true"></span>
-          <span data-boot-copy>Loading claudebot…</span>
+          <span>Loading claudebot...</span>
         </div>
       </div>
     </div>

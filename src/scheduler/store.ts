@@ -8,7 +8,8 @@ export class SchedulerStore {
   constructor(private readonly schedulesPath: string, private readonly runsPath: string) {}
 
   async listSchedules(): Promise<ScheduleRecord[]> {
-    return (await readJson<SchedulesFile>(this.schedulesPath, { schedules: [] })).schedules;
+    const file = await readJson<SchedulesFile>(this.schedulesPath, { schedules: [] });
+    return file.schedules.map(normalizeScheduleRecord);
   }
 
   async saveSchedules(schedules: ScheduleRecord[]): Promise<void> {
@@ -32,4 +33,15 @@ export class SchedulerStore {
     else runs.push(run);
     await writeJsonAtomic(this.runsPath, { runs });
   }
+}
+
+function normalizeScheduleRecord(schedule: ScheduleRecord): ScheduleRecord {
+  return {
+    ...schedule,
+    state: {
+      ...schedule.state,
+      runningStartedAt: schedule.state.runningStartedAt ?? null,
+      lastSkippedReason: schedule.state.lastSkippedReason ?? null,
+    },
+  };
 }

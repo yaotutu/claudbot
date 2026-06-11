@@ -91,6 +91,17 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
       if (frame.type === "run.completed" && frame.sessionId === effectiveSessionIdRef.current) {
         setStreaming(false);
       }
+      if (frame.type === "run.error" && frame.sessionId === effectiveSessionIdRef.current) {
+        setStreaming(false);
+        activeAssistantIdRef.current = null;
+        setMessages((current) => [...current, {
+          id: `error-${frame.runId ?? crypto.randomUUID()}`,
+          role: "system",
+          content: frame.message,
+          createdAt: new Date().toISOString(),
+          metadata: { error: true, ...(frame.runId ? { runId: frame.runId } : {}) },
+        }]);
+      }
     });
   }, [options.client]);
 

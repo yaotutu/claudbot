@@ -18,6 +18,8 @@ export type ScheduleRecord = {
     lastError: string | null;
     runCount: number;
     running: boolean;
+    runningStartedAt: string | null;
+    lastSkippedReason: string | null;
   };
   createdAt: string;
   updatedAt: string;

@@ -2,7 +2,6 @@ import ReactDOM from "react-dom/client";
 
 import App from "./App";
 import "./globals.css";
-import "./i18n";
 
 // `crypto.randomUUID` is only defined in secure contexts (HTTPS or localhost).
 // LAN access over plain HTTP leaves it undefined, which crashes components that
@@ -23,5 +22,5 @@ if (typeof globalThis.crypto !== "undefined" && !("randomUUID" in globalThis.cry
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
 
-/* StrictMode disabled: dev double-invokes state updaters; delta accumulation must stay pure — see useClaudebotStream. */
+/* StrictMode disabled so WebSocket side effects are not double-opened in dev. */
 ReactDOM.createRoot(root).render(<App />);
