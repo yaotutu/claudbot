@@ -42,9 +42,10 @@ describe("useClaudebotSessions", () => {
     expect(result.current.activeSessionId).toMatch(/^draft-/);
     expect(result.current.activeSession).toMatchObject({ status: "draft", title: "New chat" });
     expect(result.current.sessions).toHaveLength(1);
+    expect(client.activateSession).not.toHaveBeenCalled();
   });
 
-  it("selects the first persisted session when bootstrap has sessions but no active id", () => {
+  it("selects and activates the first persisted session when bootstrap has sessions but no active id", async () => {
     const client = makeClient();
     const { result } = renderHook(() => useClaudebotSessions({
       initialSessions: [persisted],
@@ -56,6 +57,20 @@ describe("useClaudebotSessions", () => {
 
     expect(result.current.activeSessionId).toBe("s1");
     expect(result.current.activeSession).toEqual(persisted);
+    await waitFor(() => expect(client.activateSession).toHaveBeenCalledWith("s1"));
+  });
+
+  it("activates the persisted active id from bootstrap", async () => {
+    const client = makeClient();
+    renderHook(() => useClaudebotSessions({
+      initialSessions: [persisted],
+      activeSessionId: "s1",
+      client,
+      deleteSession: vi.fn(),
+      renameSession: vi.fn(),
+    }));
+
+    await waitFor(() => expect(client.activateSession).toHaveBeenCalledWith("s1"));
   });
 
   it("creates a draft session and replaces it when session.created arrives", async () => {

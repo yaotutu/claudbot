@@ -6,6 +6,14 @@ export type RuntimeState = {
   lastActiveReason: string;
 };
 
+export type LastActiveReason =
+  | "user_open"
+  | "user_switch"
+  | "user_message"
+  | "stale_reset"
+  | "schedule_delivery_stale_reset"
+  | "schedule_delivery_fallback";
+
 const emptyState: RuntimeState = {
   lastActiveSessionId: "",
   lastActiveAt: "",
@@ -19,7 +27,7 @@ export class RuntimeStateStore {
     return readJson<RuntimeState>(this.path, emptyState);
   }
 
-  async setLastActiveSession(sessionId: string, reason: "user_open" | "user_switch" | "user_message" | "stale_reset"): Promise<void> {
+  async setLastActiveSession(sessionId: string, reason: LastActiveReason): Promise<void> {
     await writeJsonAtomic(this.path, {
       lastActiveSessionId: sessionId,
       lastActiveAt: new Date().toISOString(),

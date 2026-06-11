@@ -20,14 +20,13 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
     },
     server: {
-      host: "127.0.0.1",
+      host: "0.0.0.0",
       port: 5173,
       strictPort: true,
       // Keep Vite's HMR socket on a dedicated path. Claudebot's app WebSocket is
       // opened directly from the browser to the gateway, so the dev server
       // should never proxy WebSocket upgrades.
       hmr: {
-        host: "127.0.0.1",
         path: hmrPath,
       },
       proxy: {

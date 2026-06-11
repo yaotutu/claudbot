@@ -10,6 +10,16 @@ import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { runtimePaths } from "../src/config/paths.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import type { QueryFactory } from "../src/agent/runner.ts";
+import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
+
+function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
+  const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
+  const factory: QueryFactory = async function* (args) {
+    (calls as Array<{ prompt: string; resumeSessionId?: string }>).push({ prompt: args.prompt, resumeSessionId: args.resumeSessionId });
+    for (const e of events) yield e;
+  };
+  return Object.assign(factory, { calls: calls as Array<{ prompt: string; resumeSessionId?: string }> });
+}
 
 describe("scheduler store-ops (CRUD)", () => {
   test("creates cron schedule with next run", async () => {
@@ -335,15 +345,6 @@ describe("scheduler trigger (start/stop)", () => {
 
 // These exercise the real `runScheduledTurn` wired into the service container.
 describe("runScheduledTurn (wired into services)", () => {
-  function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
-    const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
-    const factory: QueryFactory = async function* (args) {
-      (calls as Array<{ prompt: string; resumeSessionId?: string }>).push({ prompt: args.prompt, resumeSessionId: args.resumeSessionId });
-      for (const e of events) yield e;
-    };
-    return Object.assign(factory, { calls: calls as Array<{ prompt: string; resumeSessionId?: string }> });
-  }
-
   test("creates new session (no resumeSessionId) and calls notifier", async () => {
     const init = { type: "system", subtype: "init", session_id: "sched-new-1" } as SdkMessage;
     const result = { type: "result", session_id: "sched-new-1", result: "hello from schedule", is_error: false } as SdkMessage;
@@ -429,5 +430,99 @@ describe("appendScheduleResult + JSONL parser", () => {
     expect(messages[1].role).toBe("assistant");
     expect(messages[1].content).toContain("定时任务 test task");
     expect(messages[1].content).toContain("task completed successfully");
+  });
+
+  test("delivers to the active session and broadcasts message.appended", async () => {
+    const { deliverScheduleResultToActiveSession } = await import("../src/scheduler/notify.ts");
+    const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-deliver-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const services = await buildServices({ config, paths, queryFactory: makeRecordingQueryFactory([]) });
+    const store = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+    await store.append({ projectKey: "claudebot", sessionId: "active-session" }, [
+      { type: "user", uuid: "u1", timestamp: "2026-06-11T00:00:00.000Z", message: { role: "user", content: "hello" } },
+    ]);
+    await services.runtimeState.setLastActiveSession("active-session", "user_open");
+    const broadcasted: unknown[] = [];
+
+    const target = await deliverScheduleResultToActiveSession(services, {
+      scheduleId: "sch_active",
+      scheduleName: "active task",
+      status: "succeeded",
+      result: "active result",
+    }, (message) => broadcasted.push(message));
+
+    expect(target?.sessionId).toBe("active-session");
+    expect(broadcasted).toHaveLength(1);
+    expect(broadcasted[0]).toMatchObject({ type: "message.appended", sessionId: "active-session" });
+    const messages = await parseJsonlToUIMessages(join(paths.sessionsDir, "active-session", "main.jsonl"));
+    expect(messages.at(-1)?.content).toContain("active result");
+  });
+
+  test("falls back to the latest SDK session when no active session is recorded", async () => {
+    const { deliverScheduleResultToActiveSession } = await import("../src/scheduler/notify.ts");
+    const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-deliver-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const services = await buildServices({ config, paths, queryFactory: makeRecordingQueryFactory([]) });
+    const store = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+    await store.append({ projectKey: "claudebot", sessionId: "older-session" }, [
+      { type: "user", uuid: "u1", timestamp: "2026-06-11T00:00:00.000Z", message: { role: "user", content: "older" } },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.append({ projectKey: "claudebot", sessionId: "latest-session" }, [
+      { type: "user", uuid: "u2", timestamp: "2026-06-11T00:01:00.000Z", message: { role: "user", content: "latest" } },
+    ]);
+    const broadcasted: unknown[] = [];
+
+    const target = await deliverScheduleResultToActiveSession(services, {
+      scheduleId: "sch_latest",
+      scheduleName: "latest task",
+      status: "succeeded",
+      result: "latest result",
+    }, (message) => broadcasted.push(message));
+
+    expect(target?.sessionId).toBe("latest-session");
+    expect((await services.runtimeState.get()).lastActiveSessionId).toBe("latest-session");
+    expect(broadcasted[0]).toMatchObject({ type: "message.appended", sessionId: "latest-session" });
+    const latestMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "latest-session", "main.jsonl"));
+    const olderMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "older-session", "main.jsonl"));
+    expect(latestMessages.at(-1)?.content).toContain("latest result");
+    expect(olderMessages).toHaveLength(1);
+  });
+
+  test("ignores a stale active session id and delivers to the latest real session", async () => {
+    const { deliverScheduleResultToActiveSession } = await import("../src/scheduler/notify.ts");
+    const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-deliver-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const services = await buildServices({ config, paths, queryFactory: makeRecordingQueryFactory([]) });
+    const store = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+    await store.append({ projectKey: "claudebot", sessionId: "real-session" }, [
+      { type: "user", uuid: "u1", timestamp: "2026-06-11T00:00:00.000Z", message: { role: "user", content: "real" } },
+    ]);
+    await services.runtimeState.setLastActiveSession("deleted-session", "user_open");
+    const broadcasted: unknown[] = [];
+
+    const target = await deliverScheduleResultToActiveSession(services, {
+      scheduleId: "sch_stale",
+      scheduleName: "stale task",
+      status: "succeeded",
+      result: "stale fallback result",
+    }, (message) => broadcasted.push(message));
+
+    expect(target?.sessionId).toBe("real-session");
+    expect((await services.runtimeState.get()).lastActiveSessionId).toBe("real-session");
+    expect(broadcasted[0]).toMatchObject({ type: "message.appended", sessionId: "real-session" });
+    const messages = await parseJsonlToUIMessages(join(paths.sessionsDir, "real-session", "main.jsonl"));
+    expect(messages.at(-1)?.content).toContain("stale fallback result");
+    const ghostFile = Bun.file(join(paths.sessionsDir, "deleted-session", "main.jsonl"));
+    expect(await ghostFile.exists()).toBe(false);
   });
 });

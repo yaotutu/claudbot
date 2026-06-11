@@ -33,6 +33,7 @@ export function useClaudebotSessions(options: UseClaudebotSessionsOptions) {
 
   const [sessions, setSessions] = useState<SessionItem[]>(initialStateRef.current.sessions);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(initialStateRef.current.activeSessionId);
+  const lastActivatedSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     return options.client.onFrame((frame) => {
@@ -70,6 +71,13 @@ export function useClaudebotSessions(options: UseClaudebotSessionsOptions) {
     [activeSessionId, sessions],
   );
 
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "persisted") return;
+    if (lastActivatedSessionIdRef.current === activeSession.id) return;
+    lastActivatedSessionIdRef.current = activeSession.id;
+    options.client.activateSession?.(activeSession.id);
+  }, [activeSession, options.client]);
+
   const createDraftSession = useCallback(() => {
     const draft = createDraftRecord();
     setSessions((current) => [draft, ...current]);
@@ -81,6 +89,7 @@ export function useClaudebotSessions(options: UseClaudebotSessionsOptions) {
   const selectSession = useCallback((sessionId: string | null) => {
     setActiveSessionId(sessionId);
     const session = sessions.find((item) => item.id === sessionId);
+    lastActivatedSessionIdRef.current = session?.status === "persisted" ? session.id : null;
     options.client.activateSession?.(session?.status === "persisted" ? session.id : null);
   }, [options.client, sessions]);
 

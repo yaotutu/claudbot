@@ -6,7 +6,7 @@ import { handleHttp } from "./gateway/http.ts";
 import { makeWsHandlers, type WsData } from "./gateway/websocket.ts";
 import { formatConfigSource, loadConfig } from "./config/loader.ts";
 import { runtimePaths } from "./config/paths.ts";
-import { appendScheduleResult } from "./scheduler/notify.ts";
+import { deliverScheduleResultToActiveSession } from "./scheduler/notify.ts";
 
 const loaded = await loadConfig();
 const config = loaded.config;
@@ -22,21 +22,7 @@ const handlers = makeWsHandlers(services);
 // 1. Append result to last active session's .jsonl (fallback inbox)
 // 2. Broadcast message.appended to all WS connections (reuse existing protocol)
 services.notifier.deliver = async (payload) => {
-  const state = await services.runtimeState.get();
-  const targetId = state.lastActiveSessionId;
-  if (!targetId) return; // no session to deliver to
-  await appendScheduleResult(services.paths.sessionsDir, targetId, payload);
-  handlers.broadcast({
-    type: "message.appended",
-    sessionId: targetId,
-    message: {
-      id: `sched-${payload.scheduleId}-${Date.now()}`,
-      role: "assistant",
-      content: `[定时任务 ${payload.scheduleName}] ${payload.result}`,
-      createdAt: new Date().toISOString(),
-      metadata: { source: "schedule", scheduleId: payload.scheduleId },
-    },
-  });
+  await deliverScheduleResultToActiveSession(services, payload, handlers.broadcast);
 };
 
 // Static webui directory (built by `cd webui && bun run build`).
@@ -93,4 +79,3 @@ process.on("SIGTERM", () => {
   server.stop();
   process.exit(0);
 });
-

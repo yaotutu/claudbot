@@ -4,6 +4,9 @@
 
 import { appendFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { ServiceContainer } from "../runtime/services.ts";
+import type { WsServerMessage } from "../gateway/protocol.ts";
+import { sessionExists } from "../sessions/adapter.ts";
 
 export type ScheduleDeliveryPayload = {
   scheduleId: string;
@@ -19,6 +22,51 @@ export type ScheduleNotifier = {
 /** Create a no-op notifier. server.ts replaces `deliver` after WS handlers are ready. */
 export function createNoopNotifier(): ScheduleNotifier {
   return { deliver: async () => {} };
+}
+
+export type ScheduleDeliveryTarget = {
+  sessionId: string;
+  message: WsServerMessage;
+};
+
+export async function deliverScheduleResultToActiveSession(
+  services: ServiceContainer,
+  payload: ScheduleDeliveryPayload,
+  broadcast: (message: WsServerMessage) => void,
+): Promise<ScheduleDeliveryTarget | null> {
+  const sessionId = await resolveScheduleDeliverySessionId(services);
+  if (!sessionId) return null;
+
+  await appendScheduleResult(services.paths.sessionsDir, sessionId, payload);
+  const message: WsServerMessage = {
+    type: "message.appended",
+    sessionId,
+    message: {
+      id: `sched-${payload.scheduleId}-${Date.now()}`,
+      role: "assistant",
+      content: `[定时任务 ${payload.scheduleName}] ${payload.result}`,
+      createdAt: new Date().toISOString(),
+      metadata: { source: "schedule", scheduleId: payload.scheduleId },
+    },
+  };
+  broadcast(message);
+  return { sessionId, message };
+}
+
+async function resolveScheduleDeliverySessionId(
+  services: ServiceContainer,
+): Promise<string | null> {
+  const state = await services.runtimeState.get();
+  if (state.lastActiveSessionId) {
+    const exists = await sessionExists(services.paths.sessionsDir, state.lastActiveSessionId);
+    if (exists) return state.lastActiveSessionId;
+    await services.runtimeState.setLastActiveSession("", "schedule_delivery_stale_reset");
+  }
+
+  const [latest] = await services.sdkSessions.list("claudebot");
+  if (!latest?.sessionId) return null;
+  await services.runtimeState.setLastActiveSession(latest.sessionId, "schedule_delivery_fallback");
+  return latest.sessionId;
 }
 
 /**
