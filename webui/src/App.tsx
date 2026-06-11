@@ -92,12 +92,6 @@ function ReadyApp({ boot }: { boot: Extract<BootState, { status: "ready" }> }) {
     return draftId;
   }, [sessions]);
 
-  useEffect(() => {
-    if (!sessions.activeSessionId && sessions.sessions.length === 0) {
-      sessions.createDraftSession();
-    }
-  }, [sessions]);
-
   return (
     <div className="flex h-full w-full bg-background text-foreground">
       <aside className="flex w-[272px] shrink-0 flex-col border-r border-sidebar-border/60 bg-sidebar px-2 py-3">

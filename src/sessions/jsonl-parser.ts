@@ -84,11 +84,13 @@ export async function parseJsonlToUIMessages(filePath: string): Promise<UIMessag
     const id = entry.uuid ?? crypto.randomUUID();
     const createdAt = entry.timestamp ?? mtimeIso ?? new Date().toISOString();
     const role = entry.type as "user" | "assistant" | "system";
+    const visibleContent = flattenContent(content);
+    if (role !== "user" && visibleContent.length === 0) continue;
 
     out.push({
       id,
       role,
-      content: flattenContent(content),
+      content: visibleContent,
       createdAt,
       metadata: extractMetadata(content),
     });

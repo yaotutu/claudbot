@@ -75,6 +75,63 @@ describe("useClaudebotThread", () => {
     expect(result.current.streaming).toBe(false);
   });
 
+  it("keeps optimistic draft messages across remap and replaces streaming reply with final message", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => []);
+    const { result, rerender } = renderHook(
+      ({ sessionId, sessionStatus }: { sessionId: string; sessionStatus: "draft" | "persisted" }) => useClaudebotThread({
+        sessionId,
+        sessionStatus,
+        client,
+        fetchMessages,
+      }),
+      { initialProps: { sessionId: "draft-1", sessionStatus: "draft" as const } },
+    );
+
+    await act(async () => {
+      result.current.send("早上好");
+    });
+
+    act(() => {
+      client.emit({ type: "session.created", draftId: "draft-1", session: { id: "s1", title: "早上好", preview: "早上好", createdAt: null, updatedAt: null, messageCount: 1, status: "persisted" } });
+    });
+
+    rerender({ sessionId: "s1", sessionStatus: "persisted" });
+    await waitFor(() => expect(fetchMessages).toHaveBeenCalledWith("s1"));
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
+      client.emit({ type: "run.delta", sessionId: "s1", runId: "r1", text: "早上好！" });
+      client.emit({ type: "run.completed", sessionId: "s1", runId: "r1", isError: false, result: "早上好！" });
+      client.emit({ type: "message.appended", sessionId: "s1", message: { id: "server-a1", role: "assistant", content: "早上好！", createdAt: "2026-06-10T10:00:00.000Z", metadata: {} } });
+    });
+
+    expect(result.current.messages.map((message) => `${message.role}:${message.content}`)).toEqual([
+      "user:早上好",
+      "assistant:早上好！",
+    ]);
+  });
+
+  it("clears the previous persisted thread when switching to a new draft", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => [{ id: "m1", role: "user", content: "旧消息", createdAt: "2026-06-10T10:00:00.000Z", metadata: {} }]);
+    const { result, rerender } = renderHook(
+      ({ sessionId, sessionStatus }: { sessionId: string; sessionStatus: "draft" | "persisted" }) => useClaudebotThread({
+        sessionId,
+        sessionStatus,
+        client,
+        fetchMessages,
+      }),
+      { initialProps: { sessionId: "s1", sessionStatus: "persisted" as const } },
+    );
+
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+
+    rerender({ sessionId: "draft-2", sessionStatus: "draft" });
+
+    expect(result.current.messages).toEqual([]);
+  });
+
   it("stops streaming when websocket closes mid-run", async () => {
     const client = makeClient();
     const fetchMessages = vi.fn(async () => []);

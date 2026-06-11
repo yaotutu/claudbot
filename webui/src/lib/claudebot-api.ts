@@ -71,12 +71,20 @@ function normalizeBootstrap(raw: unknown): WebuiBootstrap {
     runtime,
     ws,
     sessions: Array.isArray(body.sessions) ? body.sessions as SessionSummary[] : [],
-    activeSessionId: typeof body.activeSessionId === "string"
-      ? body.activeSessionId
-      : typeof body.lastActiveSessionId === "string"
-        ? body.lastActiveSessionId
-        : null,
+    activeSessionId: normalizeSessionId(
+      typeof body.activeSessionId === "string"
+        ? body.activeSessionId
+        : typeof body.lastActiveSessionId === "string"
+          ? body.lastActiveSessionId
+          : null,
+    ),
   };
+}
+
+function normalizeSessionId(sessionId: string | null): string | null {
+  if (!sessionId) return null;
+  const trimmed = sessionId.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function legacyRuntime(body: Record<string, unknown>): RuntimeInfo {

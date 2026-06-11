@@ -50,6 +50,25 @@ describe("claudebot native API client", () => {
     expect(boot.activeSessionId).toBe("s1");
   });
 
+  it("normalizes an empty lastActiveSessionId to null", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      runtime: {
+        home: "/tmp/home",
+        workspace: "/tmp/home/workspace",
+        gateway: { host: "127.0.0.1", port: 18790 },
+        model: "glm-5.1",
+        permissionMode: "bypassPermissions",
+      },
+      ws_path: "/ws",
+      sessions: [],
+      lastActiveSessionId: "",
+    })));
+
+    const boot = await fetchBootstrap();
+
+    expect(boot.activeSessionId).toBeNull();
+  });
+
   it("listSessions reads canonical summaries", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
       expect(String(url)).toBe("/api/sessions");

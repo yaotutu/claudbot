@@ -105,6 +105,28 @@ describe("parseJsonlToUIMessages", () => {
     expect(out[0].metadata).toEqual({ toolCalls: [{ id: "t1", name: "Read", input: { path: "/x" } }] });
   });
 
+  test("skips assistant records that only contain thinking blocks", async () => {
+    const file = await writeJsonl("thinking-only.jsonl", [
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a-thinking",
+        timestamp: "2026-06-09T10:00:00Z",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "hidden reasoning" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a-text",
+        timestamp: "2026-06-09T10:00:01Z",
+        message: { role: "assistant", content: [{ type: "text", text: "visible" }] },
+      }),
+    ]);
+
+    const out = await parseJsonlToUIMessages(file);
+
+    expect(out.map((message) => message.id)).toEqual(["a-text"]);
+    expect(out[0].content).toBe("visible");
+  });
+
   test("returns [] for an empty file", async () => {
     const file = await writeJsonl("empty.jsonl", []);
     const out = await parseJsonlToUIMessages(file);

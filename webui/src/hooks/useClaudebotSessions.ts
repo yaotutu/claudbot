@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DraftSession, ServerFrame, SessionSummary } from "@/lib/claudebot-types";
 
@@ -18,8 +18,21 @@ export type UseClaudebotSessionsOptions = {
 };
 
 export function useClaudebotSessions(options: UseClaudebotSessionsOptions) {
-  const [sessions, setSessions] = useState<SessionItem[]>(options.initialSessions);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(options.activeSessionId);
+  const initialStateRef = useRef<{ sessions: SessionItem[]; activeSessionId: string | null } | null>(null);
+  if (!initialStateRef.current) {
+    if (!options.activeSessionId && options.initialSessions.length === 0) {
+      const draft = createDraftRecord();
+      initialStateRef.current = { sessions: [draft], activeSessionId: draft.id };
+    } else {
+      initialStateRef.current = {
+        sessions: options.initialSessions,
+        activeSessionId: options.activeSessionId || options.initialSessions[0]?.id || null,
+      };
+    }
+  }
+
+  const [sessions, setSessions] = useState<SessionItem[]>(initialStateRef.current.sessions);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(initialStateRef.current.activeSessionId);
 
   useEffect(() => {
     return options.client.onFrame((frame) => {
@@ -58,16 +71,7 @@ export function useClaudebotSessions(options: UseClaudebotSessionsOptions) {
   );
 
   const createDraftSession = useCallback(() => {
-    const now = new Date().toISOString();
-    const draft: DraftSession = {
-      id: `draft-${crypto.randomUUID()}`,
-      title: "New chat",
-      preview: "",
-      createdAt: now,
-      updatedAt: now,
-      messageCount: 0,
-      status: "draft",
-    };
+    const draft = createDraftRecord();
     setSessions((current) => [draft, ...current]);
     setActiveSessionId(draft.id);
     options.client.activateSession?.(null);
@@ -105,6 +109,19 @@ export function useClaudebotSessions(options: UseClaudebotSessionsOptions) {
     selectSession,
     deleteSession,
     renameSession,
+  };
+}
+
+function createDraftRecord(): DraftSession {
+  const now = new Date().toISOString();
+  return {
+    id: `draft-${crypto.randomUUID()}`,
+    title: "New chat",
+    preview: "",
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 0,
+    status: "draft",
   };
 }
 

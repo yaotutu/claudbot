@@ -29,6 +29,35 @@ const persisted: SessionSummary = {
 };
 
 describe("useClaudebotSessions", () => {
+  it("starts with a local draft when bootstrap has no sessions", () => {
+    const client = makeClient();
+    const { result } = renderHook(() => useClaudebotSessions({
+      initialSessions: [],
+      activeSessionId: null,
+      client,
+      deleteSession: vi.fn(),
+      renameSession: vi.fn(),
+    }));
+
+    expect(result.current.activeSessionId).toMatch(/^draft-/);
+    expect(result.current.activeSession).toMatchObject({ status: "draft", title: "New chat" });
+    expect(result.current.sessions).toHaveLength(1);
+  });
+
+  it("selects the first persisted session when bootstrap has sessions but no active id", () => {
+    const client = makeClient();
+    const { result } = renderHook(() => useClaudebotSessions({
+      initialSessions: [persisted],
+      activeSessionId: null,
+      client,
+      deleteSession: vi.fn(),
+      renameSession: vi.fn(),
+    }));
+
+    expect(result.current.activeSessionId).toBe("s1");
+    expect(result.current.activeSession).toEqual(persisted);
+  });
+
   it("creates a draft session and replaces it when session.created arrives", async () => {
     const client = makeClient();
     const { result } = renderHook(() => useClaudebotSessions({
