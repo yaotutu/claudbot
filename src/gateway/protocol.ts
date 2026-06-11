@@ -37,4 +37,5 @@ export type WsServerMessage =
   | { type: "run.completed"; sessionId: string; runId: string; isError: boolean; result?: string; totalCostUsd?: number }
   | { type: "run.error"; sessionId?: string; runId?: string; message: string }
   | { type: "message.appended"; sessionId: string; message: { id: string; role: "user" | "assistant" | "system"; content: string; createdAt: string; metadata: Record<string, unknown> } }
-  | { type: "schedule.delivered"; scheduleId: string; status: "succeeded" | "failed" };
+  | { type: "schedule.delivered"; scheduleId: string; status: "succeeded" | "failed"; sessionId: string }
+  | { type: "schedule.failed"; scheduleId: string; message: string };

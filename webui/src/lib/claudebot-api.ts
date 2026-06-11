@@ -1,4 +1,13 @@
-import type { RuntimeInfo, SessionSummary, ThreadMessage, WebuiBootstrap } from "./claudebot-types";
+import type {
+  CreateSchedulePayload,
+  RuntimeInfo,
+  ScheduleRecord,
+  ScheduleRunRecord,
+  SessionSummary,
+  ThreadMessage,
+  UpdateSchedulePayload,
+  WebuiBootstrap,
+} from "./claudebot-types";
 
 export class ClaudebotApiError extends Error {
   status: number;
@@ -57,6 +66,40 @@ export async function renameSession(sessionId: string, title: string, base = "")
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title }),
   });
+}
+
+export async function listSchedules(base = ""): Promise<ScheduleRecord[]> {
+  return request<ScheduleRecord[]>(`${base}/api/schedules`);
+}
+
+export async function createSchedule(input: CreateSchedulePayload, base = ""): Promise<ScheduleRecord> {
+  return request<ScheduleRecord>(`${base}/api/schedules`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateSchedule(scheduleId: string, patch: UpdateSchedulePayload, base = ""): Promise<ScheduleRecord> {
+  return request<ScheduleRecord>(`${base}/api/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteSchedule(scheduleId: string, base = ""): Promise<boolean> {
+  const body = await request<{ deleted: string }>(`${base}/api/schedules/${encodeURIComponent(scheduleId)}`, { method: "DELETE" });
+  return body.deleted === scheduleId;
+}
+
+export async function runScheduleNow(scheduleId: string, base = ""): Promise<ScheduleRunRecord> {
+  return request<ScheduleRunRecord>(`${base}/api/schedules/${encodeURIComponent(scheduleId)}/run-now`, { method: "POST" });
+}
+
+export async function fetchScheduleRuns(scheduleId?: string, base = ""): Promise<ScheduleRunRecord[]> {
+  const query = scheduleId ? `?scheduleId=${encodeURIComponent(scheduleId)}` : "";
+  return request<ScheduleRunRecord[]>(`${base}/api/schedule-runs${query}`);
 }
 
 function normalizeBootstrap(raw: unknown): WebuiBootstrap {

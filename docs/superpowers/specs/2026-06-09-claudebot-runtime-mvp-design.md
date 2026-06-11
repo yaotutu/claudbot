@@ -28,8 +28,8 @@ This MVP focuses on the runtime required by the WebUI. CLI chat, multi-channel d
 - Scheduler supports cron expressions only.
 - Scheduler includes `schedule_run_now`.
 - Scheduler failures are not retried automatically, but are persisted and reported to the user.
-- Scheduler results are delivered to the last user-activated session.
-- If no last active session exists, the scheduler skips the run.
+- Scheduler results are delivered to a stable `Claudebot Inbox` SDK session.
+- `lastActiveSessionId` records the user's foreground session only; it is not the scheduler delivery target.
 - Scheduled turns are one-off Claude turns that inherit the current agent files, memory, workspace, and tools.
 - Scheduled turns do not become normal sessions.
 - Schedule run history stores final result or error, not full transcripts.
@@ -130,7 +130,7 @@ The runner uses `@anthropic-ai/claude-agent-sdk`.
 
 Each normal WebUI session stores a `claudeSessionId` when available. Future user turns resume that Claude session.
 
-Each scheduled execution creates a one-off Claude turn. It does not reuse the last active session's Claude session ID. It reads current instance data and emits a final result into the last active WebUI session.
+Each scheduled execution creates a one-off Claude turn. It does not reuse the last active session's Claude session ID. It reads current instance data and emits a final result into the stable `Claudebot Inbox` session so background work does not pollute the user's current conversation.
 
 The runner injects:
 

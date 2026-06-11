@@ -154,6 +154,58 @@ describe("gateway HTTP", () => {
     expect(run.scheduleId).toBe(sched.id);
   });
 
+  test("scheduler CRUD API creates, updates, lists runs, and deletes schedules", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+
+    const create = await handleHttp(
+      new Request("http://x/api/schedules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "daily", cronExpr: "* * * * *", timezone: "UTC", message: "check" }),
+      }),
+      new URL("http://x/api/schedules"),
+      services,
+    );
+    expect(create.status).toBe(200);
+    const created = await create.json() as { id: string; name: string; enabled: boolean };
+    expect(created.name).toBe("daily");
+    expect(created.enabled).toBe(true);
+
+    const update = await handleHttp(
+      new Request(`http://x/api/schedules/${created.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "daily updated", message: "check harder", enabled: false }),
+      }),
+      new URL(`http://x/api/schedules/${created.id}`),
+      services,
+    );
+    expect(update.status).toBe(200);
+    const updated = await update.json() as { id: string; name: string; message: string; enabled: boolean };
+    expect(updated).toMatchObject({ id: created.id, name: "daily updated", message: "check harder", enabled: false });
+
+    await services.trigger.runNow(created.id);
+    const runs = await handleHttp(
+      new Request(`http://x/api/schedule-runs?scheduleId=${created.id}`),
+      new URL(`http://x/api/schedule-runs?scheduleId=${created.id}`),
+      services,
+    );
+    expect(runs.status).toBe(200);
+    const runRows = await runs.json() as Array<{ scheduleId: string }>;
+    expect(runRows.length).toBeGreaterThanOrEqual(1);
+    expect(runRows.every((run) => run.scheduleId === created.id)).toBe(true);
+
+    const del = await handleHttp(
+      new Request(`http://x/api/schedules/${created.id}`, { method: "DELETE" }),
+      new URL(`http://x/api/schedules/${created.id}`),
+      services,
+    );
+    expect(del.status).toBe(200);
+    const list = await handleHttp(new Request("http://x/api/schedules"), new URL("http://x/api/schedules"), services);
+    const remaining = await list.json() as Array<{ id: string }>;
+    expect(remaining.find((schedule) => schedule.id === created.id)).toBeUndefined();
+  });
+
   test("failing schedule run persists failure (covered in scheduler.test.ts)", async () => {
     // Executor-failure case is unit-tested directly against SchedulerService.
     // Gateway surface is the same code path as the success test above.

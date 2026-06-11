@@ -41,6 +41,54 @@ export type WebuiBootstrap = {
   activeSessionId: string | null;
 };
 
+export type ScheduleKind = "at" | "every" | "cron";
+
+export type ScheduleRecord = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  kind: ScheduleKind;
+  cronExpr: string;
+  at: string | null;
+  everyMs: number | null;
+  timezone: string;
+  message: string;
+  deleteAfterRun: boolean;
+  state: {
+    nextRunAt: string;
+    lastRunAt: string | null;
+    lastStatus: string | null;
+    lastError: string | null;
+    runCount: number;
+    running: boolean;
+    runningStartedAt: string | null;
+    lastSkippedReason: string | null;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScheduleRunRecord = {
+  id: string;
+  scheduleId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: "running" | "succeeded" | "failed" | "skipped_running";
+  result: string;
+  error: string;
+};
+
+export type CreateSchedulePayload = {
+  name: string;
+  message: string;
+  cronExpr?: string;
+  at?: string;
+  everyMs?: number;
+  timezone?: string;
+};
+
+export type UpdateSchedulePayload = Partial<CreateSchedulePayload> & { enabled?: boolean };
+
 export type ClientFrame =
   | { type: "session.activate"; sessionId: string | null }
   | { type: "chat.send"; sessionId?: string; draftId?: string; content: string }
@@ -56,4 +104,8 @@ export type ServerFrame =
   | { type: "run.thinking"; sessionId: string; runId: string; text: string }
   | { type: "run.tool"; sessionId: string; runId: string; tool: Record<string, unknown> }
   | { type: "run.completed"; sessionId: string; runId: string; isError: boolean; result?: string; totalCostUsd?: number }
-  | { type: "run.error"; sessionId?: string; runId?: string; message: string };
+  | { type: "run.error"; sessionId?: string; runId?: string; message: string }
+  | { type: "schedule.updated"; schedule: ScheduleRecord }
+  | { type: "schedule.deleted"; scheduleId: string }
+  | { type: "schedule.delivered"; scheduleId: string; status: "succeeded" | "failed"; sessionId: string }
+  | { type: "schedule.failed"; scheduleId: string; message: string };

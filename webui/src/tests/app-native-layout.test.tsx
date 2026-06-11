@@ -23,6 +23,12 @@ function persistedBootstrap(): WebuiBootstrap {
 vi.mock("@/lib/claudebot-api", () => ({
   fetchBootstrap: vi.fn(async () => bootstrapPayload),
   fetchThreadMessages: vi.fn(async () => [{ id: "m1", role: "user", content: "hello", createdAt: "2026-06-10T09:59:40.000Z", metadata: {} }]),
+  listSchedules: vi.fn(async () => [{ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: "succeeded", lastError: null, runCount: 1, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" }]),
+  createSchedule: vi.fn(async () => ({ id: "sch_new", name: "new task", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "new", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: null, lastError: null, runCount: 0, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" })),
+  updateSchedule: vi.fn(async () => undefined),
+  deleteSchedule: vi.fn(async () => true),
+  runScheduleNow: vi.fn(async () => ({ id: "run_1", scheduleId: "sch_1", startedAt: "2026-06-11T00:00:00.000Z", finishedAt: null, status: "running", result: "", error: "" })),
+  fetchScheduleRuns: vi.fn(async () => [{ id: "run_1", scheduleId: "sch_1", startedAt: "2026-06-11T00:00:00.000Z", finishedAt: "2026-06-11T00:00:01.000Z", status: "succeeded", result: "ok", error: "" }]),
   deleteSession: vi.fn(async () => true),
   renameSession: vi.fn(async () => undefined),
 }));
@@ -71,6 +77,31 @@ describe("App native layout", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Skills" }));
     expect(await screen.findByText(/技能目录暂未接入/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(await screen.findByText("定时任务")).toBeInTheDocument();
+    expect(await screen.findByText("daily")).toBeInTheDocument();
+    expect(screen.getByText("succeeded")).toBeInTheDocument();
+  });
+
+  it("updates the inbox session preview when a scheduled result is appended", async () => {
+    bootstrapPayload = {
+      ...persistedBootstrap(),
+      sessions: [
+        ...persistedBootstrap().sessions,
+        { id: "claudebot-inbox", title: "Claudebot Inbox", preview: "old", createdAt: null, updatedAt: null, messageCount: 1, status: "persisted" },
+      ],
+    };
+    render(<App />);
+    expect(await screen.findByText("Claudebot Inbox")).toBeInTheDocument();
+
+    act(() => {
+      for (const handler of frameHandlers) {
+        handler({ type: "message.appended", sessionId: "claudebot-inbox", message: { id: "sched-1", role: "assistant", content: "scheduled result", createdAt: "2026-06-11T00:00:00.000Z", metadata: { source: "schedule" } } });
+      }
+    });
+
+    await waitFor(() => expect(screen.getByText("scheduled result")).toBeInTheDocument());
   });
 
   it("creates a draft chat and sends through native websocket frames", async () => {

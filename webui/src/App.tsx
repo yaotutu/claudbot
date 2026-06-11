@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Brain, MessageSquarePlus, Search, Settings, Sparkles } from "lucide-react";
+import { Brain, CalendarClock, MessageSquarePlus, Search, Settings, Sparkles } from "lucide-react";
 
-import { deleteSession, fetchBootstrap, fetchThreadMessages, renameSession } from "@/lib/claudebot-api";
+import {
+  createSchedule,
+  deleteSchedule,
+  deleteSession,
+  fetchBootstrap,
+  fetchScheduleRuns,
+  fetchThreadMessages,
+  listSchedules,
+  renameSession,
+  runScheduleNow,
+  updateSchedule,
+} from "@/lib/claudebot-api";
 import { ClaudebotWsClient, type ConnectionStatus } from "@/lib/claudebot-ws";
-import type { RuntimeInfo, SessionSummary } from "@/lib/claudebot-types";
+import type { RuntimeInfo, ScheduleRecord, ScheduleRunRecord, SessionSummary } from "@/lib/claudebot-types";
 import { useClaudebotSessions } from "@/hooks/useClaudebotSessions";
 import { useClaudebotThread } from "@/hooks/useClaudebotThread";
 
@@ -12,7 +23,7 @@ type BootState =
   | { status: "error"; message: string }
   | { status: "ready"; runtime: RuntimeInfo; wsPath: string; sessions: SessionSummary[]; activeSessionId: string | null };
 
-type Panel = "settings" | "search" | "skills" | null;
+type Panel = "settings" | "search" | "skills" | "tasks" | null;
 
 function pickWsUrl(path: string, runtime: RuntimeInfo): string {
   if (typeof window === "undefined") return `ws://127.0.0.1:${runtime.gateway.port}${path}`;
@@ -102,6 +113,7 @@ function ReadyApp({ boot }: { boot: Extract<BootState, { status: "ready" }> }) {
         <SidebarButton icon={<MessageSquarePlus size={17} />} label="New chat" onClick={createDraft} />
         <SidebarButton icon={<Search size={17} />} label="Search" onClick={() => setPanel("search")} />
         <SidebarButton icon={<Brain size={17} />} label="Skills" onClick={() => setPanel("skills")} />
+        <SidebarButton icon={<CalendarClock size={17} />} label="Tasks" onClick={() => setPanel("tasks")} />
         <div className="mt-5 px-2 text-xs text-muted-foreground">Sessions</div>
         <div className="mt-2 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {sessions.sessions.map((session) => (
@@ -134,7 +146,8 @@ function ReadyApp({ boot }: { boot: Extract<BootState, { status: "ready" }> }) {
           onNewChat={createDraft}
           hasSession={Boolean(sessions.activeSessionId)}
         />
-        {panel ? <InfoPanel panel={panel} runtime={boot.runtime} onClose={() => setPanel(null)} /> : null}
+        {panel === "tasks" ? <TasksPanel onClose={() => setPanel(null)} /> : null}
+        {panel && panel !== "tasks" ? <InfoPanel panel={panel} runtime={boot.runtime} onClose={() => setPanel(null)} /> : null}
       </main>
     </div>
   );
@@ -210,7 +223,122 @@ function ThreadArea({ messages, loading, streaming, disabled, onSend, onNewChat,
   );
 }
 
-function InfoPanel({ panel, runtime, onClose }: { panel: Exclude<Panel, null>; runtime: RuntimeInfo; onClose: () => void }) {
+function TasksPanel({ onClose }: { onClose: () => void }) {
+  const [schedules, setSchedules] = useState<ScheduleRecord[]>([]);
+  const [runs, setRuns] = useState<ScheduleRunRecord[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [draft, setDraft] = useState({ name: "", message: "", kind: "cron", cronExpr: "* * * * *", at: "", everyMs: "300000", timezone: "UTC" });
+
+  const refresh = useCallback(async () => {
+    const [scheduleRows, runRows] = await Promise.all([listSchedules(), fetchScheduleRuns()]);
+    setSchedules(scheduleRows);
+    setRuns(runRows);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    refresh()
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
+
+  const submit = async () => {
+    if (!draft.name.trim() || !draft.message.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      await createSchedule({
+        name: draft.name.trim(),
+        message: draft.message.trim(),
+        timezone: draft.timezone.trim() || "UTC",
+        ...(draft.kind === "at" ? { at: draft.at } : {}),
+        ...(draft.kind === "every" ? { everyMs: Number(draft.everyMs) } : {}),
+        ...(draft.kind === "cron" ? { cronExpr: draft.cronExpr } : {}),
+      });
+      setDraft((current) => ({ ...current, name: "", message: "" }));
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const mutate = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="absolute right-5 top-16 z-20 flex max-h-[calc(100vh-5rem)] w-[520px] flex-col rounded-lg border border-border bg-popover p-4 text-sm shadow-xl">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="font-semibold">定时任务</h2>
+        <button className="rounded-md px-2 py-1 text-muted-foreground hover:bg-muted" onClick={onClose}>Close</button>
+      </div>
+      {error ? <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div> : null}
+      <div className="grid gap-2 border-b border-border pb-3">
+        <div className="grid grid-cols-2 gap-2">
+          <input className="rounded-md border border-border bg-background px-2 py-1" placeholder="Name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+          <select className="rounded-md border border-border bg-background px-2 py-1" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
+            <option value="cron">cron</option>
+            <option value="at">at</option>
+            <option value="every">every</option>
+          </select>
+        </div>
+        <textarea className="min-h-16 resize-none rounded-md border border-border bg-background px-2 py-1" placeholder="Message" value={draft.message} onChange={(event) => setDraft({ ...draft, message: event.target.value })} />
+        <div className="grid grid-cols-2 gap-2">
+          {draft.kind === "cron" ? <input className="rounded-md border border-border bg-background px-2 py-1" value={draft.cronExpr} onChange={(event) => setDraft({ ...draft, cronExpr: event.target.value })} /> : null}
+          {draft.kind === "at" ? <input className="rounded-md border border-border bg-background px-2 py-1" placeholder="ISO time" value={draft.at} onChange={(event) => setDraft({ ...draft, at: event.target.value })} /> : null}
+          {draft.kind === "every" ? <input className="rounded-md border border-border bg-background px-2 py-1" value={draft.everyMs} onChange={(event) => setDraft({ ...draft, everyMs: event.target.value })} /> : null}
+          <input className="rounded-md border border-border bg-background px-2 py-1" value={draft.timezone} onChange={(event) => setDraft({ ...draft, timezone: event.target.value })} />
+        </div>
+        <button className="w-fit rounded-md bg-foreground px-3 py-1.5 text-background disabled:opacity-50" disabled={busy || !draft.name.trim() || !draft.message.trim()} onClick={submit}>Create</button>
+      </div>
+      <div className="mt-3 min-h-0 overflow-y-auto">
+        {busy && schedules.length === 0 ? <div className="text-xs text-muted-foreground">Loading...</div> : null}
+        {schedules.map((schedule) => {
+          const latestRun = runs.find((run) => run.scheduleId === schedule.id);
+          return (
+            <div key={schedule.id} className="border-b border-border py-3 last:border-b-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{schedule.name}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{schedule.kind} · next {formatDate(schedule.state.nextRunAt)}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{schedule.state.lastStatus ?? latestRun?.status ?? "never"}</div>
+                  {schedule.state.lastError ? <div className="mt-1 text-xs text-destructive">{schedule.state.lastError}</div> : null}
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button className="rounded-md border border-border px-2 py-1 text-xs" disabled={busy} onClick={() => mutate(() => updateSchedule(schedule.id, { enabled: !schedule.enabled }))}>{schedule.enabled ? "Disable" : "Enable"}</button>
+                  <button className="rounded-md border border-border px-2 py-1 text-xs" disabled={busy} onClick={() => mutate(() => runScheduleNow(schedule.id))}>Run</button>
+                  <button className="rounded-md border border-border px-2 py-1 text-xs" disabled={busy} onClick={() => mutate(() => deleteSchedule(schedule.id))}>Delete</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function InfoPanel({ panel, runtime, onClose }: { panel: "settings" | "search" | "skills"; runtime: RuntimeInfo; onClose: () => void }) {
   return (
     <div className="absolute right-5 top-16 z-20 w-[360px] rounded-lg border border-border bg-popover p-4 text-sm shadow-xl">
       <div className="mb-3 flex items-center justify-between">
@@ -232,6 +360,13 @@ function InfoPanel({ panel, runtime, onClose }: { panel: Exclude<Panel, null>; r
       )}
     </div>
   );
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {

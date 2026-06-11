@@ -115,6 +115,66 @@ export async function handleHttp(
     if (path === "/api/schedules" && method === "GET") {
       return json(200, await services.storeOps.list());
     }
+    if (path === "/api/schedules" && method === "POST") {
+      const body = await safeJson(req) as {
+        name?: string;
+        message?: string;
+        cronExpr?: string;
+        at?: string;
+        everyMs?: number;
+        timezone?: string;
+      } | null;
+      if (!body?.name || !body?.message) return json(400, { error: "name and message required" });
+      try {
+        const schedule = await services.storeOps.create({
+          name: body.name,
+          message: body.message,
+          cronExpr: body.cronExpr,
+          at: body.at,
+          everyMs: body.everyMs,
+          timezone: body.timezone,
+        });
+        return json(200, schedule);
+      } catch (err) {
+        return json(400, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (path === "/api/schedule-runs" && method === "GET") {
+      const scheduleId = url.searchParams.get("scheduleId");
+      const runs = await services.schedulerStore.listRuns();
+      const filtered = scheduleId ? runs.filter((run) => run.scheduleId === scheduleId) : runs;
+      return json(200, filtered.slice().reverse());
+    }
+    const scheduleMatch = path.match(/^\/api\/schedules\/([A-Za-z0-9_-]+)$/);
+    if (scheduleMatch && method === "PATCH") {
+      const id = scheduleMatch[1];
+      const body = await safeJson(req) as Record<string, unknown> | null;
+      if (!body) return json(400, { error: "JSON body required" });
+      try {
+        let schedule = body.enabled === undefined
+          ? undefined
+          : await services.storeOps.setEnabled(id, Boolean(body.enabled));
+        const patch: Record<string, unknown> = {};
+        for (const key of ["name", "message", "cronExpr", "timezone", "everyMs", "at"] as const) {
+          if (body[key] !== undefined) patch[key] = body[key];
+        }
+        if (Object.keys(patch).length > 0) {
+          schedule = await services.storeOps.update(id, patch);
+        }
+        return json(200, schedule ?? await findSchedule(services, id));
+      } catch (err) {
+        return json(400, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (scheduleMatch && method === "DELETE") {
+      const id = scheduleMatch[1];
+      try {
+        await services.storeOps.delete(id);
+        return json(200, { deleted: id });
+      } catch (err) {
+        return json(400, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
     const scheduleRunMatch = path.match(/^\/api\/schedules\/([A-Za-z0-9_-]+)\/run-now$/);
     if (scheduleRunMatch && method === "POST") {
       const id = scheduleRunMatch[1];
@@ -139,6 +199,12 @@ export async function handleHttp(
   } catch (err) {
     return json(500, { error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+async function findSchedule(services: ServiceContainer, id: string) {
+  const schedule = (await services.storeOps.list()).find((item) => item.id === id);
+  if (!schedule) throw new Error(`schedule not found: ${id}`);
+  return schedule;
 }
 
 type SessionLineInfo = {

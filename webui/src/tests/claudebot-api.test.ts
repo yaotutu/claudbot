@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchBootstrap, fetchRuntime, fetchThreadMessages, listSessions } from "@/lib/claudebot-api";
+import {
+  createSchedule,
+  deleteSchedule,
+  fetchBootstrap,
+  fetchRuntime,
+  fetchScheduleRuns,
+  fetchThreadMessages,
+  listSchedules,
+  listSessions,
+  runScheduleNow,
+  updateSchedule,
+} from "@/lib/claudebot-api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -101,5 +112,40 @@ describe("claudebot native API client", () => {
     const messages = await fetchThreadMessages("s1");
 
     expect(messages[0]).toMatchObject({ id: "m1", role: "user", content: "hi" });
+  });
+
+  it("manages schedules through native scheduler endpoints", async () => {
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      if (String(url) === "/api/schedules" && !init?.method) {
+        return jsonResponse([{ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: null, lastError: null, runCount: 0, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" }]);
+      }
+      if (String(url) === "/api/schedule-runs?scheduleId=sch_1") {
+        return jsonResponse([{ id: "run_1", scheduleId: "sch_1", startedAt: "2026-06-11T00:00:00.000Z", finishedAt: null, status: "running", result: "", error: "" }]);
+      }
+      if (String(url) === "/api/schedules/sch_1" && init?.method === "DELETE") return jsonResponse({ deleted: "sch_1" });
+      return jsonResponse({ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: null, lastError: null, runCount: 0, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" });
+    }));
+
+    expect((await listSchedules())[0]?.id).toBe("sch_1");
+    await createSchedule({ name: "daily", message: "check", cronExpr: "* * * * *", timezone: "UTC" });
+    await updateSchedule("sch_1", { enabled: false, message: "updated" });
+    await runScheduleNow("sch_1");
+    expect((await fetchScheduleRuns("sch_1"))[0]?.id).toBe("run_1");
+    expect(await deleteSchedule("sch_1")).toBe(true);
+
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET /api/schedules",
+      "POST /api/schedules",
+      "PATCH /api/schedules/sch_1",
+      "POST /api/schedules/sch_1/run-now",
+      "GET /api/schedule-runs?scheduleId=sch_1",
+      "DELETE /api/schedules/sch_1",
+    ]);
   });
 });

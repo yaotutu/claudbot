@@ -8,6 +8,9 @@ import type { ServiceContainer } from "../runtime/services.ts";
 import type { WsServerMessage } from "../gateway/protocol.ts";
 import { sessionExists } from "../sessions/adapter.ts";
 
+export const SCHEDULE_INBOX_SESSION_ID = "claudebot-inbox";
+export const SCHEDULE_INBOX_TITLE = "Claudebot Inbox";
+
 export type ScheduleDeliveryPayload = {
   scheduleId: string;
   scheduleName: string;
@@ -38,6 +41,9 @@ export async function deliverScheduleResultToActiveSession(
   if (!sessionId) return null;
 
   await appendScheduleResult(services.paths.sessionsDir, sessionId, payload);
+  if (sessionId === SCHEDULE_INBOX_SESSION_ID) {
+    await services.sdkSessions.rename(sessionId, SCHEDULE_INBOX_TITLE).catch(() => {});
+  }
   const message: WsServerMessage = {
     type: "message.appended",
     sessionId,
@@ -50,6 +56,12 @@ export async function deliverScheduleResultToActiveSession(
     },
   };
   broadcast(message);
+  broadcast({
+    type: "schedule.delivered",
+    scheduleId: payload.scheduleId,
+    status: payload.status,
+    sessionId,
+  });
   return { sessionId, message };
 }
 
@@ -57,16 +69,13 @@ async function resolveScheduleDeliverySessionId(
   services: ServiceContainer,
 ): Promise<string | null> {
   const state = await services.runtimeState.get();
-  if (state.lastActiveSessionId) {
-    const exists = await sessionExists(services.paths.sessionsDir, state.lastActiveSessionId);
-    if (exists) return state.lastActiveSessionId;
-    await services.runtimeState.setLastActiveSession("", "schedule_delivery_stale_reset");
+  if (state.inboxSessionId) {
+    const exists = await sessionExists(services.paths.sessionsDir, state.inboxSessionId);
+    if (exists) return state.inboxSessionId;
   }
 
-  const [latest] = await services.sdkSessions.list("claudebot");
-  if (!latest?.sessionId) return null;
-  await services.runtimeState.setLastActiveSession(latest.sessionId, "schedule_delivery_fallback");
-  return latest.sessionId;
+  await services.runtimeState.setInboxSession(SCHEDULE_INBOX_SESSION_ID);
+  return SCHEDULE_INBOX_SESSION_ID;
 }
 
 /**
