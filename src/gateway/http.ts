@@ -1,6 +1,5 @@
 // HTTP API: REST endpoints for sessions, agent files, schedules, media, health, bootstrap.
 
-import { join } from "node:path";
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { AgentFileName } from "../agent/profile.ts";
 
@@ -24,8 +23,7 @@ export async function handleHttp(
     }
 
     if (path === "/webui/bootstrap" && method === "GET") {
-      const summaries = await listSessionSummaries(services);
-      const state = await services.runtimeState.get();
+      const summaries = await services.sessions.listSummaries();
       return json(200, {
         config: {
           gateway: services.config.gateway,
@@ -39,7 +37,7 @@ export async function handleHttp(
         runtime: runtimeInfo(services),
         model_name: services.config.claudeCode.model,
         ws_path: "/ws",
-        lastActiveSessionId: state.lastActiveSessionId,
+        lastActiveSessionId: await services.sessions.getActiveSessionId(),
         sessions: summaries,
       });
     }
@@ -59,7 +57,7 @@ export async function handleHttp(
     }
 
     if (path === "/api/sessions" && method === "GET") {
-      return json(200, await listSessionSummaries(services));
+      return json(200, await services.sessions.listSummaries());
     }
 
     const sessionMatch = path.match(/^\/api\/sessions\/([A-Za-z0-9_-]+)(\/.*)?$/);
@@ -67,26 +65,21 @@ export async function handleHttp(
       const id = sessionMatch[1];
       const sub = sessionMatch[2] || "";
       if (sub === "" && method === "DELETE") {
-        await services.sdkSessions.remove(id);
+        await services.sessions.remove(id);
         return json(200, { deleted: id });
       }
       if (sub === "" && method === "PATCH") {
         const body = await safeJson(req) as { title?: string } | null;
         if (!body?.title) return json(400, { error: "title required" });
-        await services.sdkSessions.rename(id, body.title);
+        await services.sessions.rename(id, body.title);
         return json(200, { id, title: body.title });
       }
       if (sub === "/messages" && method === "GET") {
-        const sessionDir = join(services.paths.sessionsDir, id, "main.jsonl");
-        const file = Bun.file(sessionDir);
-        if (!(await file.exists())) return json(200, []);
-        const { parseJsonlToUIMessages } = await import("../sessions/jsonl-parser.ts");
-        const messages = await parseJsonlToUIMessages(sessionDir);
-        return json(200, messages);
+        return json(200, await services.sessions.readMessages(id));
       }
       if (sub === "/activate" && method === "POST") {
-        await services.runtimeState.setLastActiveSession(id, "user_open");
-        return json(200, { lastActiveSessionId: id });
+        const activeId = await services.sessions.activate(id);
+        return json(200, { lastActiveSessionId: activeId });
       }
     }
 
@@ -217,12 +210,6 @@ async function findSchedule(services: ServiceContainer, id: string) {
   return schedule;
 }
 
-type SessionLineInfo = {
-  messageCount: number;
-  firstTimestamp: string | null;
-  firstUserText: string;
-};
-
 function runtimeInfo(services: ServiceContainer) {
   return {
     home: services.paths.home,
@@ -231,71 +218,6 @@ function runtimeInfo(services: ServiceContainer) {
     model: services.config.claudeCode.model,
     permissionMode: services.config.claudeCode.permissionMode,
   };
-}
-
-async function listSessionSummaries(services: ServiceContainer) {
-  const list = await services.sdkSessions.list("claudebot");
-  return Promise.all(list.map((s) => buildSessionSummary(services, s.sessionId, s.mtime)));
-}
-
-async function buildSessionSummary(services: ServiceContainer, sessionId: string, mtime: number) {
-  const info = await services.sdkSessions.info(sessionId);
-  const mainFile = Bun.file(join(services.paths.sessionsDir, sessionId, "main.jsonl"));
-  const text = await mainFile.exists() ? await mainFile.text() : "";
-  const lineInfo = summarizeSessionLines(text);
-  const firstPrompt = info?.firstPrompt ?? lineInfo.firstUserText;
-  const title = info?.customTitle ?? info?.summary ?? firstPrompt ?? "New chat";
-  return {
-    id: sessionId,
-    title: title || "New chat",
-    preview: firstPrompt || "",
-    createdAt: lineInfo.firstTimestamp,
-    updatedAt: new Date(mtime).toISOString(),
-    messageCount: lineInfo.messageCount,
-    status: "persisted" as const,
-  };
-}
-
-function summarizeSessionLines(text: string): SessionLineInfo {
-  const out: SessionLineInfo = { messageCount: 0, firstTimestamp: null, firstUserText: "" };
-  for (const line of text.split("\n")) {
-    if (!line) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isRecord(entry)) continue;
-    const type = typeof entry.type === "string" ? entry.type : "";
-    if (type !== "user" && type !== "assistant" && type !== "system") continue;
-    out.messageCount += 1;
-    if (!out.firstTimestamp && typeof entry.timestamp === "string") {
-      out.firstTimestamp = entry.timestamp;
-    }
-    if (!out.firstUserText && type === "user" && isRecord(entry.message)) {
-      out.firstUserText = flattenWireContent(entry.message.content);
-    }
-  }
-  return out;
-}
-
-function flattenWireContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((block) => {
-      if (!isRecord(block)) return "";
-      if (block.type === "text" && typeof block.text === "string") return block.text;
-      return "";
-    })
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .join(" ");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function isAgentFile(name: string): name is AgentFileName {

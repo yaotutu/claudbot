@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises
 import { join, dirname } from "node:path";
 import type { SessionKey, SessionStore, SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
 
-export type ClaudebotSessionStoreOptions = {
+export type SdkJsonlSessionStoreOptions = {
   sessionsDir: string;
 };
 
@@ -12,34 +12,15 @@ function pathFor(sessionsDir: string, key: SessionKey): string {
   return join(sessionDir, `${key.subpath}.jsonl`);
 }
 
-function sessionDirFor(sessionsDir: string, sessionId: string): string {
-  return join(sessionsDir, sessionId);
-}
-
-/**
- * Check whether a session has a main.jsonl file on disk (i.e. was actually
- * created by the SDK and mirrored by the adapter). Old-format `sess_*.json`
- * files return false — they are not valid SDK sessions.
- */
-export async function sessionExists(sessionsDir: string, sessionId: string): Promise<boolean> {
-  const mainFile = join(sessionsDir, sessionId, "main.jsonl");
-  try {
-    const f = Bun.file(mainFile);
-    return await f.exists();
-  } catch {
-    return false;
-  }
-}
-
-export function createClaudebotSessionStore(
-  opts: ClaudebotSessionStoreOptions,
+export function createSdkJsonlSessionStore(
+  opts: SdkJsonlSessionStoreOptions,
 ): SessionStore {
   return {
     async append(key, entries) {
       if (entries.length === 0) return;
       const file = pathFor(opts.sessionsDir, key);
       await mkdir(dirname(file), { recursive: true });
-      const lines = entries.map((e) => JSON.stringify(e) + "\n").join("");
+      const lines = entries.map((entry) => JSON.stringify(entry) + "\n").join("");
       await appendFile(file, lines, "utf8");
     },
 
@@ -59,10 +40,6 @@ export function createClaudebotSessionStore(
     },
 
     async listSessions(projectKey) {
-      // projectKey is accepted for SDK contract compliance. Claudebot uses
-      // a single projectKey ("claudebot"); if multi-tenancy is ever added,
-      // a per-session .project sidecar would be needed to scope properly.
-      const _projectKey = projectKey; // intentionally unused
       const root = opts.sessionsDir;
       let entries: string[];
       try {
@@ -74,8 +51,7 @@ export function createClaudebotSessionStore(
       const out: Array<{ sessionId: string; mtime: number }> = [];
       for (const sessionId of entries) {
         const mainFile = pathFor(root, { projectKey, sessionId });
-        const f = Bun.file(mainFile);
-        if (!(await f.exists())) continue;
+        if (!(await Bun.file(mainFile).exists())) continue;
         const st = await stat(mainFile);
         out.push({ sessionId, mtime: st.mtimeMs });
       }
@@ -93,19 +69,11 @@ export function createClaudebotSessionStore(
         }
         return;
       }
-      const dir = sessionDirFor(opts.sessionsDir, key.sessionId);
-      try {
-        await rm(dir, { recursive: true, force: true });
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      }
+      await rm(join(opts.sessionsDir, key.sessionId), { recursive: true, force: true });
     },
 
     async listSubkeys(key) {
-      // Layout invariant: subkeys always live under <sessionDir>/subagents/<id>.jsonl.
-      // The pathFor() function encodes this; we read that directory directly
-      // rather than scanning the whole session tree.
-      const subagentsDir = join(sessionDirFor(opts.sessionsDir, key.sessionId), "subagents");
+      const subagentsDir = join(opts.sessionsDir, key.sessionId, "subagents");
       let files: string[];
       try {
         files = await readdir(subagentsDir);
@@ -114,8 +82,8 @@ export function createClaudebotSessionStore(
         throw err;
       }
       return files
-        .filter((f) => f.endsWith(".jsonl"))
-        .map((f) => `subagents/${f.slice(0, -".jsonl".length)}`);
+        .filter((file) => file.endsWith(".jsonl"))
+        .map((file) => `subagents/${file.slice(0, -".jsonl".length)}`);
     },
   };
 }

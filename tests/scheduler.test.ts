@@ -10,7 +10,7 @@ import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { runtimePaths } from "../src/config/paths.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import type { QueryFactory } from "../src/agent/runner.ts";
-import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
+import { createSdkJsonlSessionStore } from "../src/sessions/sdk-jsonl-store.ts";
 
 function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
   const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
@@ -435,7 +435,7 @@ describe("schedule notification delivery", () => {
     const config = resolveRuntimeConfig({ home: dir }, {});
     const paths = runtimePaths(config);
     const services = await buildServices({ config, paths, queryFactory: makeRecordingQueryFactory([]) });
-    const store = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: paths.sessionsDir });
     await store.append({ projectKey: "claudebot", sessionId: "active-session" }, [
       { type: "user", uuid: "u1", timestamp: "2026-06-11T00:00:00.000Z", message: { role: "user", content: "hello" } },
     ]);
@@ -478,7 +478,7 @@ describe("schedule notification delivery", () => {
     const config = resolveRuntimeConfig({ home: dir }, {});
     const paths = runtimePaths(config);
     const services = await buildServices({ config, paths, queryFactory: makeRecordingQueryFactory([]) });
-    const store = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: paths.sessionsDir });
     await store.append({ projectKey: "claudebot", sessionId: "older-session" }, [
       { type: "user", uuid: "u1", timestamp: "2026-06-11T00:00:00.000Z", message: { role: "user", content: "older" } },
     ]);

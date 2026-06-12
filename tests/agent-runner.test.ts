@@ -11,7 +11,7 @@ import { ToolRegistry } from "../src/tools/registry.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { MemoryStore } from "../src/memory/store.ts";
-import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
+import { createSdkJsonlSessionStore } from "../src/sessions/sdk-jsonl-store.ts";
 import type { NormalizedEvent, SdkMessage } from "../src/agent/events.ts";
 
 // Capture every call to the mocked SDK so individual tests can assert on what
@@ -191,7 +191,7 @@ describe("makeRealQueryFactory", () => {
     const sdkDir = mkdtempSync(join(tmpdir(), "claudebot-sdk-"));
     const sessionsDir = mkdtempSync(join(tmpdir(), "claudebot-sess-"));
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const sessionStore = createClaudebotSessionStore({ sessionsDir });
+    const sessionStore = createSdkJsonlSessionStore({ sessionsDir });
     const factory = makeRealQueryFactory(registry, config, sdkDir, sessionStore);
     // Consume the generator enough to trigger the SDK call (which happens on
     // first `for await` iteration, before any message is yielded).

@@ -1,17 +1,18 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClaudebotSessionStore } from "./adapter.ts";
 
-describe("ClaudebotSessionStore append + load", () => {
+import { createSdkJsonlSessionStore } from "./sdk-jsonl-store.ts";
+
+describe("SdkJsonlSessionStore append + load", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "claudebot-store-"));
   });
 
   test("append + load round-trips entries in order", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     const key = { projectKey: "claudebot", sessionId: "sess-1" };
     const entries = [
       { type: "user", uuid: "u1", timestamp: "2026-06-09T10:00:00Z", message: { role: "user", content: "hi" } },
@@ -23,23 +24,20 @@ describe("ClaudebotSessionStore append + load", () => {
   });
 
   test("load returns null for unknown key", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     const loaded = await store.load({ projectKey: "claudebot", sessionId: "nope" });
     expect(loaded).toBeNull();
   });
 });
 
-describe("ClaudebotSessionStore listSessions", () => {
+describe("SdkJsonlSessionStore listSessions", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "claudebot-store-"));
   });
 
   test("listSessions returns session IDs with valid mtime, sorted by recency", async () => {
-    // Claudebot uses a single projectKey ("claudebot") and does not implement
-    // multi-tenant scoping. The projectKey arg is accepted for SDK contract
-    // compliance but no cross-project filtering is performed.
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     await store.append({ projectKey: "claudebot", sessionId: "s-a" }, [{ type: "user", uuid: "u" }]);
     await new Promise((r) => setTimeout(r, 5));
     await store.append({ projectKey: "claudebot", sessionId: "s-b" }, [{ type: "user", uuid: "u" }]);
@@ -54,7 +52,7 @@ describe("ClaudebotSessionStore listSessions", () => {
   });
 
   test("listSessions excludes subagent subpaths", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     await store.append({ projectKey: "p1", sessionId: "s1" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s1", subpath: "subagents/agent-x" }, [{ type: "user", uuid: "u" }]);
     const list = await store.listSessions!("p1");
@@ -62,14 +60,14 @@ describe("ClaudebotSessionStore listSessions", () => {
   });
 });
 
-describe("ClaudebotSessionStore delete", () => {
+describe("SdkJsonlSessionStore delete", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "claudebot-store-"));
   });
 
   test("deleting the main key cascades to subkeys but not other sessions", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     await store.append({ projectKey: "p1", sessionId: "s1" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s1", subpath: "subagents/agent-x" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s2" }, [{ type: "user", uuid: "u" }]);
@@ -82,7 +80,7 @@ describe("ClaudebotSessionStore delete", () => {
   });
 
   test("deleting a subpath removes only that subkey", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     await store.append({ projectKey: "p1", sessionId: "s1" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s1", subpath: "subagents/agent-x" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s1", subpath: "subagents/agent-y" }, [{ type: "user", uuid: "u" }]);
@@ -95,14 +93,14 @@ describe("ClaudebotSessionStore delete", () => {
   });
 });
 
-describe("ClaudebotSessionStore listSubkeys", () => {
+describe("SdkJsonlSessionStore listSubkeys", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "claudebot-store-"));
   });
 
   test("listSubkeys returns subpaths scoped to the session", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     await store.append({ projectKey: "p1", sessionId: "s1" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s1", subpath: "subagents/agent-x" }, [{ type: "user", uuid: "u" }]);
     await store.append({ projectKey: "p1", sessionId: "s1", subpath: "subagents/agent-y" }, [{ type: "user", uuid: "u" }]);
@@ -112,7 +110,7 @@ describe("ClaudebotSessionStore listSubkeys", () => {
   });
 
   test("listSubkeys returns [] for an unknown session", async () => {
-    const store = createClaudebotSessionStore({ sessionsDir: dir });
+    const store = createSdkJsonlSessionStore({ sessionsDir: dir });
     const subs = await store.listSubkeys!({ projectKey: "p1", sessionId: "nope" });
     expect(subs).toEqual([]);
   });

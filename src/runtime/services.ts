@@ -7,7 +7,8 @@ import { join } from "node:path";
 import type { RuntimeConfig } from "../config/schema.ts";
 import { loadConfig, type LoadedConfig } from "../config/loader.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
-import { createClaudebotSessionStore } from "../sessions/adapter.ts";
+import { createSdkJsonlSessionStore } from "../sessions/sdk-jsonl-store.ts";
+import { createSessionService, type ClaudebotSessionService } from "../sessions/session-service.ts";
 import { RuntimeStateStore } from "./state.ts";
 import { AgentProfileStore } from "../agent/profile.ts";
 import { MemoryStore } from "../memory/store.ts";
@@ -21,17 +22,7 @@ import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
 import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
-import { sessionExists } from "../sessions/adapter.ts";
-import { getSessionInfo, renameSession, deleteSession } from "@anthropic-ai/claude-agent-sdk";
-import type { SessionStore as SDKSessionStore, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
-
-export type SdkSessionsFacade = {
-  store: SDKSessionStore;
-  list: (projectKey: string) => Promise<Array<{ sessionId: string; mtime: number }>>;
-  info: (sessionId: string) => Promise<SDKSessionInfo | undefined>;
-  rename: (sessionId: string, title: string) => Promise<void>;
-  remove: (sessionId: string) => Promise<void>;
-};
+import type { SessionStore as SDKSessionStore } from "@anthropic-ai/claude-agent-sdk";
 
 export type ServiceContainer = {
   config: RuntimeConfig;
@@ -46,7 +37,8 @@ export type ServiceContainer = {
   trigger: SchedulerTrigger;
   toolRegistry: ToolRegistry;
   queryFactory: QueryFactory;
-  sdkSessions: SdkSessionsFacade;
+  sdkSessionStore: SDKSessionStore;
+  sessions: ClaudebotSessionService;
   makeRunner: (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string) => ClaudeRunner;
 };
 
@@ -77,21 +69,8 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   const memory = new MemoryStore(paths.memoryFile);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.runsFile);
   const notificationStore = createNotificationStore(paths.notificationsFile);
-
-  // Validate lastActiveSessionId on startup. If it points to a session that
-  // doesn't exist in the new adapter format (e.g. old sess_*.json or a
-  // phantom UUID from a failed run), clear it so the first user message
-  // creates a fresh session instead of trying to resume a ghost.
-  const initState = await runtimeState.get();
-  if (initState.lastActiveSessionId) {
-    const exists = await sessionExists(paths.sessionsDir, initState.lastActiveSessionId);
-    if (!exists) {
-      await runtimeState.setLastActiveSession("", "stale_reset");
-      console.log(
-        `[init] cleared stale lastActiveSessionId: ${initState.lastActiveSessionId} (no main.jsonl found)`,
-      );
-    }
-  }
+  const sessions = createSessionService({ sessionsDir: paths.sessionsDir, runtimeState });
+  await sessions.clearStaleActiveSession();
 
   // --- Linear assembly: Store → StoreOps → Registry → queryFactory → Trigger ---
 
@@ -117,24 +96,11 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     profile,
   });
 
-  // 4. Session store + SDK sessions facade
-  const sessionStore = createClaudebotSessionStore({ sessionsDir: paths.sessionsDir });
-  const sdkSessions: SdkSessionsFacade = {
-    store: sessionStore,
-    list: (projectKey: string) => sessionStore.listSessions!(projectKey),
-    info: async (sessionId: string) => {
-      return getSessionInfo(sessionId, { sessionStore });
-    },
-    rename: async (sessionId: string, title: string) => {
-      await renameSession(sessionId, title, { sessionStore });
-    },
-    remove: async (sessionId: string) => {
-      await deleteSession(sessionId, { sessionStore });
-    },
-  };
+  // 4. SDK transcript mirror store. Business session reads go through `sessions`.
+  const sdkSessionStore = createSdkJsonlSessionStore({ sessionsDir: paths.sessionsDir });
 
   // 5. Query factory (uses registry — no cycle)
-  const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sessionStore);
+  const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sdkSessionStore);
 
   // 6. Trigger (uses store + executor that closes over queryFactory — no cycle)
   triggerRef = createSchedulerTrigger(schedulerStore, async (sched, run) => {
@@ -173,7 +139,8 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     trigger: triggerRef,
     toolRegistry,
     queryFactory,
-    sdkSessions,
+    sdkSessionStore,
+    sessions,
     makeRunner,
   };
 }

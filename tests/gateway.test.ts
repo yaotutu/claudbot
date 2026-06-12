@@ -10,7 +10,7 @@ import { handleHttp } from "../src/gateway/http.ts";
 import type { QueryFactory } from "../src/agent/runner.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import { readFileSync } from "node:fs";
-import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
+import { appendSessionJsonlEntry } from "../src/sessions/jsonl-store.ts";
 
 function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
   const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
@@ -30,11 +30,11 @@ async function makeServices(queryFactory: QueryFactory) {
 }
 
 describe("gateway HTTP", () => {
-  test("service container exposes SDK sessions but not legacy session store", async () => {
+  test("service container exposes business sessions but not SDK session facade", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
 
-    expect("sdkSessions" in services).toBe(true);
-    expect("sessions" in services).toBe(false);
+    expect("sessions" in services).toBe(true);
+    expect("sdkSessions" in services).toBe(false);
   });
 
   test("GET /health returns ok", async () => {
@@ -53,15 +53,14 @@ describe("gateway HTTP", () => {
     expect(arr).toEqual([]);
   });
 
-  test("GET /api/sessions lists sessions seeded by the SDK sessionStore", async () => {
+  test("GET /api/sessions lists sessions seeded by JSONL", async () => {
     const { services, dir } = await makeServices(makeRecordingQueryFactory([]));
-    // Seed a session through the same adapter the SDK uses, so the
-    // /api/sessions listing picks it up via services.sdkSessions.list.
-    const store = createClaudebotSessionStore({ sessionsDir: join(dir, "sessions") });
-    const key = { projectKey: "claudebot", sessionId: "sess-seeded" };
-    await store.append(key, [
-      { type: "user", uuid: "u1", timestamp: "2026-06-09T10:00:00Z", message: { role: "user", content: "hi" } },
-    ]);
+    await appendSessionJsonlEntry(join(dir, "sessions"), "sess-seeded", {
+      type: "user",
+      uuid: "u1",
+      timestamp: "2026-06-09T10:00:00Z",
+      message: { role: "user", content: "hi" },
+    });
     const list = await handleHttp(new Request("http://x/api/sessions"), new URL("http://x/api/sessions"), services);
     expect(list.status).toBe(200);
     const arr = await list.json() as { id: string }[];
@@ -70,13 +69,26 @@ describe("gateway HTTP", () => {
 
   test("GET /api/sessions returns canonical WebUI session summaries", async () => {
     const { services, dir } = await makeServices(makeRecordingQueryFactory([]));
-    const store = createClaudebotSessionStore({ sessionsDir: join(dir, "sessions") });
     const seededId = randomUUID();
-    await store.append({ projectKey: "claudebot", sessionId: seededId }, [
-      { type: "user", uuid: "u1", timestamp: "2026-06-10T09:59:40.000Z", message: { role: "user", content: "hello world" } },
-      { type: "assistant", uuid: "a1", timestamp: "2026-06-10T09:59:45.000Z", message: { role: "assistant", content: "hi" } },
-    ]);
-    await services.sdkSessions.rename(seededId, "hello world");
+    await appendSessionJsonlEntry(join(dir, "sessions"), seededId, {
+      type: "user",
+      uuid: "u1",
+      timestamp: "2026-06-10T09:59:40.000Z",
+      message: { role: "user", content: "hello world" },
+    });
+    await appendSessionJsonlEntry(join(dir, "sessions"), seededId, {
+      type: "assistant",
+      uuid: "a1",
+      timestamp: "2026-06-10T09:59:45.000Z",
+      message: { role: "assistant", content: "hi" },
+    });
+    await appendSessionJsonlEntry(join(dir, "sessions"), seededId, {
+      type: "custom-title",
+      uuid: randomUUID(),
+      timestamp: "2026-06-10T10:00:00.000Z",
+      customTitle: "hello world",
+      sessionId: seededId,
+    });
 
     const res = await handleHttp(new Request("http://x/api/sessions"), new URL("http://x/api/sessions"), services);
     expect(res.status).toBe(200);
@@ -170,7 +182,8 @@ describe("gateway HTTP", () => {
   });
 
   test("POST /api/sessions/:id/activate updates last active", async () => {
-    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const { services, dir } = await makeServices(makeRecordingQueryFactory([]));
+    await appendSessionJsonlEntry(join(dir, "sessions"), "sess_activate_test", { type: "user", uuid: "u1" });
     const activate = await handleHttp(
       new Request("http://x/api/sessions/sess_activate_test/activate", { method: "POST" }),
       new URL("http://x/api/sessions/sess_activate_test/activate"),
@@ -179,6 +192,18 @@ describe("gateway HTTP", () => {
     expect(activate.status).toBe(200);
     const state = await services.runtimeState.get();
     expect(state.lastActiveSessionId).toBe("sess_activate_test");
+  });
+
+  test("POST /api/sessions/:id/activate clears stale active ids", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const activate = await handleHttp(
+      new Request("http://x/api/sessions/missing/activate", { method: "POST" }),
+      new URL("http://x/api/sessions/missing/activate"),
+      services,
+    );
+    expect(activate.status).toBe(200);
+    expect(await activate.json()).toEqual({ lastActiveSessionId: null });
+    expect((await services.runtimeState.get()).lastActiveSessionId).toBe("");
   });
 
   test("PUT /api/agent/files/:name returns 409 on stale version", async () => {
@@ -273,7 +298,7 @@ describe("gateway HTTP", () => {
   });
 });
 
-describe("WebSocket chat.user_message end-to-end (mocked runner)", () => {
+describe("ClaudeRunner end-to-end (mocked query factory)", () => {
   test("user message -> mocked runner -> assistant text_delta + turn_done", async () => {
     const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
     const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;

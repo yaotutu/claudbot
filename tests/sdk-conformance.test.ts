@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClaudebotSessionStore } from "../src/sessions/adapter.ts";
+import { createSdkJsonlSessionStore } from "../src/sessions/sdk-jsonl-store.ts";
 
 // Structural copies of SDK types — kept here to avoid coupling to internal
 // type evolution. Must match @anthropic-ai/claude-agent-sdk shape.
@@ -155,9 +155,9 @@ function runConformance(factory: () => Promise<SessionStore>) {
   });
 }
 
-describe("ClaudebotSessionStore conformance", () => {
+describe("SdkJsonlSessionStore conformance", () => {
   runConformance(async () => {
     const dir = mkdtempSync(join(tmpdir(), "claudebot-conform-"));
-    return createClaudebotSessionStore({ sessionsDir: dir });
+    return createSdkJsonlSessionStore({ sessionsDir: dir });
   });
 });

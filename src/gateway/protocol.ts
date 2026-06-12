@@ -13,9 +13,8 @@ export type AgentWireEvent =
 
 // WebSocket: client -> server
 export type WsClientMessage =
-  | { type: "session.activate"; sessionId: string }
+  | { type: "session.activate"; sessionId: string | null }
   | { type: "chat.send"; sessionId?: string; draftId?: string; content: string }
-  | { type: "chat.user_message"; content: string }
   | { type: "chat.cancel" };
 
 export type SessionSummaryWire = {

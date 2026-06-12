@@ -1,10 +1,9 @@
-// WebSocket handler: client envelopes, server envelopes, run Claude turn on chat.user_message.
+// WebSocket handler: client envelopes, server envelopes, run Claude turns.
 
 import type { ServerWebSocket } from "bun";
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { SessionSummaryWire, WsClientMessage, WsServerMessage } from "./protocol.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
-import { sessionExists } from "../sessions/adapter.ts";
 
 // SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
 // long so the adapter mirror has a chance to flush before we ack the WebUI.
@@ -65,31 +64,14 @@ async function handleClientMessage(
 ): Promise<void> {
   switch (msg.type) {
     case "session.activate": {
-      // If the client activates a session that doesn't exist on disk (e.g. a
-      // freshly generated UUID from newChat), clear lastActiveSessionId so the
-      // next user message creates a fresh SDK session instead of trying to resume.
-      const exists = msg.sessionId
-        ? await sessionExists(services.paths.sessionsDir, msg.sessionId)
-        : false;
-      const effectiveId = exists ? msg.sessionId : "";
-      await services.runtimeState.setLastActiveSession(effectiveId, "user_switch");
-      ws.data.sessionId = effectiveId;
-      send(ws, { type: "session.activated", sessionId: effectiveId || null });
+      const activeId = await services.sessions.activate(msg.sessionId || null);
+      ws.data.sessionId = activeId || "";
+      send(ws, { type: "session.activated", sessionId: activeId });
       return;
     }
     case "chat.send": {
       const explicitId = msg.sessionId || ws.data.sessionId || null;
-      const state = explicitId ? null : await services.runtimeState.get();
-      const sessionId = explicitId || state?.lastActiveSessionId || null;
-      await runUserTurn(ws, services, sessionId, msg.content, { draftId: msg.draftId });
-      return;
-    }
-    case "chat.user_message": {
-      const state = await services.runtimeState.get();
-      const sessionId = ws.data.sessionId && ws.data.sessionId !== "pending"
-        ? ws.data.sessionId
-        : (state.lastActiveSessionId || null);
-      await runUserTurn(ws, services, sessionId, msg.content);
+      await runUserTurn(ws, services, explicitId, msg.content, { draftId: msg.draftId });
       return;
     }
     case "chat.cancel": {
@@ -111,33 +93,7 @@ export async function runUserTurn(
   const initialRouteId = sessionId ?? options.draftId ?? "pending";
   send({ type: "run.started", sessionId: initialRouteId, runId });
 
-  // Resolve session: either caller-supplied, last active, or null (let SDK create).
-  // Validate that the session actually exists on disk — the adapter only has
-  // entries for sessions the SDK created and the adapter mirrored. Stale IDs
-  // from old-format sess_*.json files or phantom UUIDs must NOT be passed as
-  // `resume` or the SDK will error ("No conversation found").
-  let sdkSessionId: string | undefined;
-  if (sessionId) {
-    const exists = await sessionExists(services.paths.sessionsDir, sessionId);
-    if (exists) {
-      sdkSessionId = sessionId;
-    } else {
-      // Stale — clear the runtime state so future requests don't retry
-      await services.runtimeState.setLastActiveSession("", "stale_reset");
-      sdkSessionId = undefined;
-    }
-  } else {
-    const state = await services.runtimeState.get();
-    if (state.lastActiveSessionId) {
-      const exists = await sessionExists(services.paths.sessionsDir, state.lastActiveSessionId);
-      if (exists) {
-        sdkSessionId = state.lastActiveSessionId;
-      } else {
-        await services.runtimeState.setLastActiveSession("", "stale_reset");
-        sdkSessionId = undefined;
-      }
-    }
-  }
+  const sdkSessionId = await services.sessions.resolveResumeSessionId(sessionId);
 
   // We need a session id before we can persist anything. If we don't have one
   // yet, run the query and capture the new id from system/init or the result.
@@ -187,12 +143,16 @@ export async function runUserTurn(
     ws.data.sessionId = lastSessionId;
   }
 
+  // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
+  // beat to flush before WebUI reads the JSONL-backed session model.
+  await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
+
   // First message in a new session — set the title from the user's message
   // so the sidebar shows a meaningful name immediately and it persists across
   // page refreshes.
   if (!sdkSessionId && lastSessionId) {
     try {
-      await services.sdkSessions.rename(lastSessionId, content.slice(0, 60));
+      await services.sessions.rename(lastSessionId, content.slice(0, 60));
     } catch { /* non-critical */ }
   }
 
@@ -203,10 +163,6 @@ export async function runUserTurn(
       session: draftSessionSummary(lastSessionId, content),
     });
   }
-
-  // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
-  // beat to flush before we ack the WebUI.
-  await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
 
   const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
   const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
