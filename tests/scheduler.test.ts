@@ -397,43 +397,38 @@ describe("runScheduledTurn (wired into services)", () => {
     expect(run.result).toBe("done");
     expect(factory.calls.length).toBe(1);
   });
+
+  test("notifies failed scheduled turns before persisting the failed run", async () => {
+    const failingFactory: QueryFactory = async function* () {
+      throw new Error("Claude turn failed");
+    };
+
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-rt-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const services = await buildServices({ config, paths, queryFactory: failingFactory });
+    const delivered: Array<Record<string, unknown>> = [];
+    services.notifier.deliver = async (payload) => { delivered.push(payload as Record<string, unknown>); };
+
+    const sched = await services.storeOps.create({ name: "broken", cronExpr: "* * * * *", timezone: "UTC", message: "fail" });
+    const run = await services.trigger.runNow(sched.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("Claude turn failed");
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({
+      scheduleId: sched.id,
+      scheduleName: "broken",
+      runId: run.id,
+      status: "failed",
+      result: "Claude turn failed",
+    });
+  });
 });
 
-describe("appendScheduleResult + JSONL parser", () => {
-  test("appended result is parseable by parseJsonlToUIMessages", async () => {
-    const { appendScheduleResult } = await import("../src/scheduler/notify.ts");
-    const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
-
-    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-jsonl-"));
-    const sessionId = "test-session-1";
-    const sessionDir = join(dir, sessionId);
-    const { mkdir } = await import("node:fs/promises");
-    await mkdir(sessionDir, { recursive: true });
-
-    // Write a user message first so there's existing content
-    const { appendFile } = await import("node:fs/promises");
-    const userEntry = { type: "user", uuid: "msg-1", timestamp: new Date().toISOString(), message: { role: "user", content: "hello" } };
-    await appendFile(join(sessionDir, "main.jsonl"), JSON.stringify(userEntry) + "\n", "utf8");
-
-    // Append schedule result
-    await appendScheduleResult(dir, sessionId, {
-      scheduleId: "sch_test",
-      scheduleName: "test task",
-      status: "succeeded",
-      result: "task completed successfully",
-    });
-
-    // Parse and verify
-    const messages = await parseJsonlToUIMessages(join(sessionDir, "main.jsonl"));
-    expect(messages.length).toBe(2);
-    expect(messages[0].role).toBe("user");
-    expect(messages[1].role).toBe("assistant");
-    expect(messages[1].content).toContain("定时任务 test task");
-    expect(messages[1].content).toContain("task completed successfully");
-  });
-
-  test("delivers scheduled results to a stable inbox session instead of the active session", async () => {
-    const { deliverScheduleResultToActiveSession } = await import("../src/scheduler/notify.ts");
+describe("schedule notification delivery", () => {
+  test("delivers scheduled results to WebUI notifications without appending to any session", async () => {
+    const { deliverScheduleResultToNotification } = await import("../src/scheduler/notify.ts");
     const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
 
     const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-deliver-"));
@@ -447,27 +442,36 @@ describe("appendScheduleResult + JSONL parser", () => {
     await services.runtimeState.setLastActiveSession("active-session", "user_open");
     const broadcasted: unknown[] = [];
 
-    const target = await deliverScheduleResultToActiveSession(services, {
+    const notification = await deliverScheduleResultToNotification(services, {
       scheduleId: "sch_inbox",
       scheduleName: "inbox task",
       status: "succeeded",
       result: "inbox result",
+      runId: "run_inbox",
     }, (message) => broadcasted.push(message));
 
-    expect(target?.sessionId).toBe("claudebot-inbox");
+    expect(notification).toMatchObject({
+      source: "schedule",
+      title: "定时任务 inbox task",
+      content: "inbox result",
+      status: "succeeded",
+      scheduleId: "sch_inbox",
+      runId: "run_inbox",
+      delivery: { type: "webui_inbox", scope: "global" },
+      readAt: null,
+    });
     expect((await services.runtimeState.get()).lastActiveSessionId).toBe("active-session");
-    expect((await services.runtimeState.get()).inboxSessionId).toBe("claudebot-inbox");
     expect(broadcasted).toHaveLength(2);
-    expect(broadcasted[0]).toMatchObject({ type: "message.appended", sessionId: "claudebot-inbox" });
-    expect(broadcasted[1]).toMatchObject({ type: "schedule.delivered", scheduleId: "sch_inbox", status: "succeeded", sessionId: "claudebot-inbox" });
-    const inboxMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "claudebot-inbox", "main.jsonl"));
+    expect(broadcasted[0]).toMatchObject({ type: "notification.created", notification: { scheduleId: "sch_inbox", runId: "run_inbox" } });
+    expect(broadcasted[1]).toMatchObject({ type: "schedule.run.completed", scheduleId: "sch_inbox", runId: "run_inbox", status: "succeeded" });
+    const stored = await services.notificationStore.list();
+    expect(stored.at(-1)).toMatchObject({ id: notification.id, content: "inbox result" });
     const activeMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "active-session", "main.jsonl"));
-    expect(inboxMessages.at(-1)?.content).toContain("inbox result");
     expect(activeMessages).toHaveLength(1);
   });
 
-  test("recreates a stale inbox session and does not fall back to the latest normal session", async () => {
-    const { deliverScheduleResultToActiveSession } = await import("../src/scheduler/notify.ts");
+  test("does not deliver scheduled results to existing chat sessions", async () => {
+    const { deliverScheduleResultToNotification } = await import("../src/scheduler/notify.ts");
     const { parseJsonlToUIMessages } = await import("../src/sessions/jsonl-parser.ts");
 
     const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-deliver-"));
@@ -482,24 +486,20 @@ describe("appendScheduleResult + JSONL parser", () => {
     await store.append({ projectKey: "claudebot", sessionId: "latest-session" }, [
       { type: "user", uuid: "u2", timestamp: "2026-06-11T00:01:00.000Z", message: { role: "user", content: "latest" } },
     ]);
-    await services.runtimeState.setInboxSession("deleted-inbox");
     const broadcasted: unknown[] = [];
 
-    const target = await deliverScheduleResultToActiveSession(services, {
+    await deliverScheduleResultToNotification(services, {
       scheduleId: "sch_recreated",
       scheduleName: "recreated task",
       status: "succeeded",
       result: "recreated inbox result",
+      runId: "run_recreated",
     }, (message) => broadcasted.push(message));
 
-    expect(target?.sessionId).toBe("claudebot-inbox");
-    expect((await services.runtimeState.get()).inboxSessionId).toBe("claudebot-inbox");
-    expect(broadcasted[0]).toMatchObject({ type: "message.appended", sessionId: "claudebot-inbox" });
-    expect(broadcasted[1]).toMatchObject({ type: "schedule.delivered", scheduleId: "sch_recreated", status: "succeeded", sessionId: "claudebot-inbox" });
-    const inboxMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "claudebot-inbox", "main.jsonl"));
+    expect(broadcasted[0]).toMatchObject({ type: "notification.created", notification: { scheduleId: "sch_recreated", runId: "run_recreated" } });
+    expect(broadcasted[1]).toMatchObject({ type: "schedule.run.completed", scheduleId: "sch_recreated", runId: "run_recreated", status: "succeeded" });
     const latestMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "latest-session", "main.jsonl"));
     const olderMessages = await parseJsonlToUIMessages(join(paths.sessionsDir, "older-session", "main.jsonl"));
-    expect(inboxMessages.at(-1)?.content).toContain("recreated inbox result");
     expect(latestMessages).toHaveLength(1);
     expect(olderMessages).toHaveLength(1);
   });

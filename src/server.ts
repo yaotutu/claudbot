@@ -6,7 +6,7 @@ import { handleHttp } from "./gateway/http.ts";
 import { makeWsHandlers, type WsData } from "./gateway/websocket.ts";
 import { formatConfigSource, loadConfig } from "./config/loader.ts";
 import { runtimePaths } from "./config/paths.ts";
-import { deliverScheduleResultToActiveSession } from "./scheduler/notify.ts";
+import { deliverScheduleResultToNotification } from "./scheduler/notify.ts";
 
 const loaded = await loadConfig();
 const config = loaded.config;
@@ -18,11 +18,10 @@ services.trigger.start(config.scheduler.tickIntervalMs);
 
 const handlers = makeWsHandlers(services);
 
-// Wire the schedule notifier to real delivery:
-// 1. Append result to last active session's .jsonl (fallback inbox)
-// 2. Broadcast message.appended to all WS connections (reuse existing protocol)
+// Wire schedule delivery to WebUI notifications. Scheduler results are product
+// notifications, not chat session messages.
 services.notifier.deliver = async (payload) => {
-  await deliverScheduleResultToActiveSession(services, payload, handlers.broadcast);
+  await deliverScheduleResultToNotification(services, payload, handlers.broadcast);
 };
 
 // Static webui directory (built by `cd webui && bun run build`).

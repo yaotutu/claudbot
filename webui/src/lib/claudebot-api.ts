@@ -1,5 +1,6 @@
 import type {
   CreateSchedulePayload,
+  NotificationRecord,
   RuntimeInfo,
   ScheduleRecord,
   ScheduleRunRecord,
@@ -100,6 +101,15 @@ export async function runScheduleNow(scheduleId: string, base = ""): Promise<Sch
 export async function fetchScheduleRuns(scheduleId?: string, base = ""): Promise<ScheduleRunRecord[]> {
   const query = scheduleId ? `?scheduleId=${encodeURIComponent(scheduleId)}` : "";
   return request<ScheduleRunRecord[]>(`${base}/api/schedule-runs${query}`);
+}
+
+export async function fetchNotifications(base = ""): Promise<NotificationRecord[]> {
+  return request<NotificationRecord[]>(`${base}/api/notifications`);
+}
+
+export async function markNotificationsRead(base = ""): Promise<number> {
+  const body = await request<{ updated: number }>(`${base}/api/notifications/read-all`, { method: "POST" });
+  return body.updated;
 }
 
 function normalizeBootstrap(raw: unknown): WebuiBootstrap {

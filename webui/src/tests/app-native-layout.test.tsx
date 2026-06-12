@@ -10,6 +10,8 @@ const activateSession = vi.fn();
 const connect = vi.fn();
 const close = vi.fn();
 let bootstrapPayload: WebuiBootstrap;
+let scheduleRows: Array<Record<string, unknown>>;
+let notificationRows: Array<Record<string, unknown>>;
 
 function persistedBootstrap(): WebuiBootstrap {
   return {
@@ -23,7 +25,9 @@ function persistedBootstrap(): WebuiBootstrap {
 vi.mock("@/lib/claudebot-api", () => ({
   fetchBootstrap: vi.fn(async () => bootstrapPayload),
   fetchThreadMessages: vi.fn(async () => [{ id: "m1", role: "user", content: "hello", createdAt: "2026-06-10T09:59:40.000Z", metadata: {} }]),
-  listSchedules: vi.fn(async () => [{ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: "succeeded", lastError: null, runCount: 1, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" }]),
+  listSchedules: vi.fn(async () => scheduleRows),
+  fetchNotifications: vi.fn(async () => notificationRows),
+  markNotificationsRead: vi.fn(async () => 1),
   createSchedule: vi.fn(async () => ({ id: "sch_new", name: "new task", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "new", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: null, lastError: null, runCount: 0, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" })),
   updateSchedule: vi.fn(async () => undefined),
   deleteSchedule: vi.fn(async () => true),
@@ -53,6 +57,8 @@ vi.mock("@/lib/claudebot-ws", () => ({
 describe("App native layout", () => {
   beforeEach(() => {
     bootstrapPayload = persistedBootstrap();
+    scheduleRows = [{ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: "succeeded", lastError: null, runCount: 1, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" }];
+    notificationRows = [{ id: "notif_1", source: "schedule", title: "定时任务 daily", content: "ok", status: "succeeded", scheduleId: "sch_1", runId: "run_1", delivery: { type: "webui_inbox", scope: "global" }, createdAt: "2026-06-11T00:00:01.000Z", readAt: null }];
     frameHandlers.clear();
     sendMessage.mockClear();
     activateSession.mockClear();
@@ -66,6 +72,7 @@ describe("App native layout", () => {
     expect((await screen.findAllByText("hello")).length).toBeGreaterThan(0);
     expect(screen.getByText("hello preview")).toBeInTheDocument();
     expect(await screen.findByText("Connected")).toBeInTheDocument();
+    expect(screen.getByLabelText("Tasks")).toHaveTextContent("1");
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("运行状态")).toBeInTheDocument();
@@ -79,29 +86,48 @@ describe("App native layout", () => {
     expect(await screen.findByText(/技能目录暂未接入/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
-    expect(await screen.findByText("定时任务")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "定时任务" })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Name")).not.toBeInTheDocument();
+    expect(screen.getByText("最近提醒")).toBeInTheDocument();
     expect(await screen.findByText("daily")).toBeInTheDocument();
     expect(screen.getByText("succeeded")).toBeInTheDocument();
+    expect(screen.getAllByText("ok").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(screen.getByPlaceholderText("Name")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Message")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Tasks")).not.toHaveTextContent("1"));
   });
 
-  it("updates the inbox session preview when a scheduled result is appended", async () => {
-    bootstrapPayload = {
-      ...persistedBootstrap(),
-      sessions: [
-        ...persistedBootstrap().sessions,
-        { id: "claudebot-inbox", title: "Claudebot Inbox", preview: "old", createdAt: null, updatedAt: null, messageCount: 1, status: "persisted" },
-      ],
-    };
+  it("shows notification results even when their original schedule no longer exists", async () => {
+    scheduleRows = [];
+    notificationRows = [{ id: "notif_orphan", source: "schedule", title: "定时任务 喝水提醒", content: "喝水时间到", status: "succeeded", scheduleId: "sch_deleted", runId: "run_deleted", delivery: { type: "webui_inbox", scope: "global" }, createdAt: "2026-06-12T06:59:08.300Z", readAt: null }];
+
     render(<App />);
-    expect(await screen.findByText("Claudebot Inbox")).toBeInTheDocument();
+    expect(await screen.findByText("Connected")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+
+    expect(await screen.findByText("最近提醒")).toBeInTheDocument();
+    expect(screen.getByText("喝水时间到")).toBeInTheDocument();
+    expect(screen.getByText("暂无定时任务")).toBeInTheDocument();
+  });
+
+  it("shows scheduled results from notification frames without creating an inbox session", async () => {
+    render(<App />);
+    expect(await screen.findByText("hello preview")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(await screen.findByRole("heading", { name: "定时任务" })).toBeInTheDocument();
 
     act(() => {
       for (const handler of frameHandlers) {
-        handler({ type: "message.appended", sessionId: "claudebot-inbox", message: { id: "sched-1", role: "assistant", content: "scheduled result", createdAt: "2026-06-11T00:00:00.000Z", metadata: { source: "schedule" } } });
+        handler({ type: "notification.created", notification: { id: "notif_2", source: "schedule", title: "定时任务 daily", content: "scheduled result", status: "succeeded", scheduleId: "sch_1", runId: "run_2", delivery: { type: "webui_inbox", scope: "global" }, createdAt: "2026-06-11T00:01:00.000Z", readAt: null } });
       }
     });
 
-    await waitFor(() => expect(screen.getByText("scheduled result")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("scheduled result").length).toBeGreaterThanOrEqual(1));
+    expect(screen.getByRole("status")).toHaveTextContent("scheduled result");
+    expect(screen.queryByText("Claudebot Inbox")).not.toBeInTheDocument();
   });
 
   it("creates a draft chat and sends through native websocket frames", async () => {

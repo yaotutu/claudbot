@@ -5,10 +5,12 @@ import {
   deleteSchedule,
   fetchBootstrap,
   fetchRuntime,
+  fetchNotifications,
   fetchScheduleRuns,
   fetchThreadMessages,
   listSchedules,
   listSessions,
+  markNotificationsRead,
   runScheduleNow,
   updateSchedule,
 } from "@/lib/claudebot-api";
@@ -147,5 +149,37 @@ describe("claudebot native API client", () => {
       "GET /api/schedule-runs?scheduleId=sch_1",
       "DELETE /api/schedules/sch_1",
     ]);
+  });
+
+  it("fetchNotifications reads WebUI delivery records", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
+      expect(String(url)).toBe("/api/notifications");
+      return jsonResponse([{
+        id: "notif_1",
+        source: "schedule",
+        title: "定时任务 daily",
+        content: "daily result",
+        status: "succeeded",
+        scheduleId: "sch_1",
+        runId: "run_1",
+        delivery: { type: "webui_inbox", scope: "global" },
+        createdAt: "2026-06-11T00:00:01.000Z",
+        readAt: null,
+      }]);
+    }));
+
+    const notifications = await fetchNotifications();
+
+    expect(notifications[0]).toMatchObject({ id: "notif_1", content: "daily result", scheduleId: "sch_1" });
+  });
+
+  it("markNotificationsRead posts to the WebUI notification read endpoint", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(url)).toBe("/api/notifications/read-all");
+      expect(init?.method).toBe("POST");
+      return jsonResponse({ updated: 3 });
+    }));
+
+    await expect(markNotificationsRead()).resolves.toBe(3);
   });
 });

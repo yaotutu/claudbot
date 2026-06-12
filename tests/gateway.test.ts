@@ -109,6 +109,66 @@ describe("gateway HTTP", () => {
     });
   });
 
+  test("GET /api/notifications returns newest WebUI delivery records first", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    await services.notificationStore.create({
+      source: "schedule",
+      title: "定时任务 older",
+      content: "old result",
+      status: "succeeded",
+      scheduleId: "sch_old",
+      runId: "run_old",
+      delivery: { type: "webui_inbox", scope: "global" },
+    });
+    const newest = await services.notificationStore.create({
+      source: "schedule",
+      title: "定时任务 newer",
+      content: "new result",
+      status: "failed",
+      scheduleId: "sch_new",
+      runId: "run_new",
+      delivery: { type: "webui_inbox", scope: "global" },
+    });
+
+    const res = await handleHttp(new Request("http://x/api/notifications"), new URL("http://x/api/notifications"), services);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Array<Record<string, unknown>>;
+
+    expect(body[0]).toMatchObject({ id: newest.id, source: "schedule", content: "new result", readAt: null });
+    expect(body.map((row) => row.runId)).toEqual(["run_new", "run_old"]);
+  });
+
+  test("POST /api/notifications/read-all marks WebUI delivery records read", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const first = await services.notificationStore.create({
+      source: "schedule",
+      title: "定时任务 first",
+      content: "first result",
+      status: "succeeded",
+      scheduleId: "sch_first",
+      runId: "run_first",
+      delivery: { type: "webui_inbox", scope: "global" },
+    });
+    const second = await services.notificationStore.create({
+      source: "schedule",
+      title: "定时任务 second",
+      content: "second result",
+      status: "succeeded",
+      scheduleId: "sch_second",
+      runId: "run_second",
+      delivery: { type: "webui_inbox", scope: "global" },
+    });
+
+    const res = await handleHttp(new Request("http://x/api/notifications/read-all", { method: "POST" }), new URL("http://x/api/notifications/read-all"), services);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { updated: number };
+    expect(body.updated).toBe(2);
+
+    const rows = await services.notificationStore.list();
+    expect(rows.find((row) => row.id === first.id)?.readAt).toEqual(expect.any(String));
+    expect(rows.find((row) => row.id === second.id)?.readAt).toEqual(expect.any(String));
+  });
+
   test("POST /api/sessions/:id/activate updates last active", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
     const activate = await handleHttp(

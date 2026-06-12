@@ -1,5 +1,7 @@
 // Wire protocol types for HTTP and WebSocket envelopes.
 
+import type { NotificationRecord } from "../notifications/types.ts";
+
 export type AgentWireEvent =
   | { type: "text_delta"; text: string; sessionId?: string }
   | { type: "thinking_delta"; thinking: string; sessionId?: string }
@@ -37,5 +39,5 @@ export type WsServerMessage =
   | { type: "run.completed"; sessionId: string; runId: string; isError: boolean; result?: string; totalCostUsd?: number }
   | { type: "run.error"; sessionId?: string; runId?: string; message: string }
   | { type: "message.appended"; sessionId: string; message: { id: string; role: "user" | "assistant" | "system"; content: string; createdAt: string; metadata: Record<string, unknown> } }
-  | { type: "schedule.delivered"; scheduleId: string; status: "succeeded" | "failed"; sessionId: string }
-  | { type: "schedule.failed"; scheduleId: string; message: string };
+  | { type: "notification.created"; notification: NotificationRecord }
+  | { type: "schedule.run.completed"; scheduleId: string; runId: string; status: "succeeded" | "failed" };

@@ -15,6 +15,7 @@ import { SchedulerStore } from "../scheduler/store.ts";
 import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.ts";
 import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
 import { createNoopNotifier, type ScheduleNotifier } from "../scheduler/notify.ts";
+import { createNotificationStore, type NotificationStore } from "../notifications/store.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
@@ -39,6 +40,7 @@ export type ServiceContainer = {
   profile: AgentProfileStore;
   memory: MemoryStore;
   schedulerStore: SchedulerStore;
+  notificationStore: NotificationStore;
   storeOps: SchedulerStoreOps;
   notifier: ScheduleNotifier;
   trigger: SchedulerTrigger;
@@ -74,6 +76,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   await profile.init();
   const memory = new MemoryStore(paths.memoryFile);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.runsFile);
+  const notificationStore = createNotificationStore(paths.notificationsFile);
 
   // Validate lastActiveSessionId on startup. If it points to a session that
   // doesn't exist in the new adapter format (e.g. old sess_*.json or a
@@ -164,6 +167,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     profile,
     memory,
     schedulerStore,
+    notificationStore,
     storeOps,
     notifier,
     trigger: triggerRef,
@@ -222,13 +226,31 @@ async function runScheduledTurn(
     queryFactory,
   );
   let result = "";
+  let failedMessage = "";
   let execSessionId: string | undefined;
   for await (const ev of runner.run({ prompt })) {
     if (ev.type === "text_delta") result += ev.text;
     if (ev.type === "turn_done") {
       result = ev.result || result;
       if (ev.sessionId) execSessionId = ev.sessionId;
+      if (ev.isError) failedMessage = ev.result || "scheduled turn failed";
     }
+    if (ev.type === "error") {
+      failedMessage = ev.message;
+      if (ev.sessionId) execSessionId = ev.sessionId;
+    }
+  }
+  if (failedMessage) {
+    await notifier.deliver({
+      scheduleId: sched.id,
+      scheduleName: sched.name,
+      runId: run.id,
+      status: "failed",
+      result: failedMessage,
+    }).catch((err) => {
+      console.error("[scheduler] notifier.deliver failed:", err instanceof Error ? err.message : err);
+    });
+    throw new Error(failedMessage);
   }
   const finalResult = result || `[定时任务 ${sched.name}] (no output)`;
 
@@ -236,6 +258,7 @@ async function runScheduledTurn(
   await notifier.deliver({
     scheduleId: sched.id,
     scheduleName: sched.name,
+    runId: run.id,
     status: "succeeded",
     result: finalResult,
   }).catch((err) => {
@@ -255,14 +278,4 @@ async function runScheduledTurn(
   }
 
   return finalResult;
-}
-
-async function readRuntimeStateOrEmpty(path: string): Promise<{ lastActiveSessionId: string }> {
-  try {
-    const f = Bun.file(path);
-    if (!(await f.exists())) return { lastActiveSessionId: "" };
-    return await f.json() as { lastActiveSessionId: string };
-  } catch {
-    return { lastActiveSessionId: "" };
-  }
 }

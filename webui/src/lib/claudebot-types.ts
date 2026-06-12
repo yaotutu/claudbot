@@ -78,6 +78,24 @@ export type ScheduleRunRecord = {
   error: string;
 };
 
+export type DeliveryChannel =
+  | { type: "webui_inbox"; scope: "global" | "agent"; agentId?: string }
+  | { type: "telegram"; chatId: string }
+  | { type: "session"; sessionId: string };
+
+export type NotificationRecord = {
+  id: string;
+  source: "schedule";
+  title: string;
+  content: string;
+  status: "succeeded" | "failed";
+  scheduleId: string;
+  runId: string;
+  delivery: DeliveryChannel;
+  createdAt: string;
+  readAt: string | null;
+};
+
 export type CreateSchedulePayload = {
   name: string;
   message: string;
@@ -107,5 +125,5 @@ export type ServerFrame =
   | { type: "run.error"; sessionId?: string; runId?: string; message: string }
   | { type: "schedule.updated"; schedule: ScheduleRecord }
   | { type: "schedule.deleted"; scheduleId: string }
-  | { type: "schedule.delivered"; scheduleId: string; status: "succeeded" | "failed"; sessionId: string }
-  | { type: "schedule.failed"; scheduleId: string; message: string };
+  | { type: "notification.created"; notification: NotificationRecord }
+  | { type: "schedule.run.completed"; scheduleId: string; runId: string; status: "succeeded" | "failed" };

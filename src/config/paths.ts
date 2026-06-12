@@ -14,6 +14,7 @@ export type RuntimePaths = {
   runsFile: string;
   webuiDir: string;
   runtimeStateFile: string;
+  notificationsFile: string;
   mediaDir: string;
   auditDir: string;
   toolAuditFile: string;
@@ -35,6 +36,7 @@ export function runtimePaths(config: RuntimeConfig): RuntimePaths {
     runsFile: join(home, "scheduler", "runs.json"),
     webuiDir: join(home, "webui"),
     runtimeStateFile: join(home, "webui", "runtime_state.json"),
+    notificationsFile: join(home, "webui", "notifications.json"),
     mediaDir: join(home, "media"),
     auditDir: join(home, "audit"),
     toolAuditFile: join(home, "audit", "tools.jsonl"),

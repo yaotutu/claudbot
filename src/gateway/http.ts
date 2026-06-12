@@ -48,6 +48,16 @@ export async function handleHttp(
       return json(200, runtimeInfo(services));
     }
 
+    if (path === "/api/notifications" && method === "GET") {
+      const notifications = await services.notificationStore.list();
+      return json(200, notifications.slice().reverse());
+    }
+
+    if (path === "/api/notifications/read-all" && method === "POST") {
+      const updated = await services.notificationStore.markAllRead();
+      return json(200, { updated });
+    }
+
     if (path === "/api/sessions" && method === "GET") {
       return json(200, await listSessionSummaries(services));
     }

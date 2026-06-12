@@ -1,19 +1,15 @@
-// Schedule notification — bridge between trigger execution and delivery channels.
-// Owns the JSONL fallback (append to last active session) and delegates to
-// whatever broadcast mechanism server.ts wires in via the mutable notifier.
+// Schedule notification bridge: turns completed background schedule runs into
+// user-visible delivery records. Default delivery is WebUI notifications, not
+// chat session messages.
 
-import { appendFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import type { ServiceContainer } from "../runtime/services.ts";
 import type { WsServerMessage } from "../gateway/protocol.ts";
-import { sessionExists } from "../sessions/adapter.ts";
-
-export const SCHEDULE_INBOX_SESSION_ID = "claudebot-inbox";
-export const SCHEDULE_INBOX_TITLE = "Claudebot Inbox";
+import type { NotificationRecord } from "../notifications/types.ts";
+import type { ServiceContainer } from "../runtime/services.ts";
 
 export type ScheduleDeliveryPayload = {
   scheduleId: string;
   scheduleName: string;
+  runId: string;
   status: "succeeded" | "failed";
   result: string;
 };
@@ -27,85 +23,27 @@ export function createNoopNotifier(): ScheduleNotifier {
   return { deliver: async () => {} };
 }
 
-export type ScheduleDeliveryTarget = {
-  sessionId: string;
-  message: WsServerMessage;
-};
-
-export async function deliverScheduleResultToActiveSession(
+export async function deliverScheduleResultToNotification(
   services: ServiceContainer,
   payload: ScheduleDeliveryPayload,
   broadcast: (message: WsServerMessage) => void,
-): Promise<ScheduleDeliveryTarget | null> {
-  const sessionId = await resolveScheduleDeliverySessionId(services);
-  if (!sessionId) return null;
-
-  await appendScheduleResult(services.paths.sessionsDir, sessionId, payload);
-  if (sessionId === SCHEDULE_INBOX_SESSION_ID) {
-    await services.sdkSessions.rename(sessionId, SCHEDULE_INBOX_TITLE).catch(() => {});
-  }
-  const message: WsServerMessage = {
-    type: "message.appended",
-    sessionId,
-    message: {
-      id: `sched-${payload.scheduleId}-${Date.now()}`,
-      role: "assistant",
-      content: `[定时任务 ${payload.scheduleName}] ${payload.result}`,
-      createdAt: new Date().toISOString(),
-      metadata: { source: "schedule", scheduleId: payload.scheduleId },
-    },
-  };
-  broadcast(message);
-  broadcast({
-    type: "schedule.delivered",
-    scheduleId: payload.scheduleId,
+): Promise<NotificationRecord> {
+  const notification = await services.notificationStore.create({
+    source: "schedule",
+    title: `定时任务 ${payload.scheduleName}`,
+    content: payload.result,
     status: payload.status,
-    sessionId,
+    scheduleId: payload.scheduleId,
+    runId: payload.runId,
+    delivery: { type: "webui_inbox", scope: "global" },
   });
-  return { sessionId, message };
-}
 
-async function resolveScheduleDeliverySessionId(
-  services: ServiceContainer,
-): Promise<string | null> {
-  const state = await services.runtimeState.get();
-  if (state.inboxSessionId) {
-    const exists = await sessionExists(services.paths.sessionsDir, state.inboxSessionId);
-    if (exists) return state.inboxSessionId;
-  }
-
-  await services.runtimeState.setInboxSession(SCHEDULE_INBOX_SESSION_ID);
-  return SCHEDULE_INBOX_SESSION_ID;
-}
-
-/**
- * Append a schedule result as an assistant message to a session's main.jsonl.
- * The entry format matches what jsonl-parser.ts expects:
- *   { type, uuid, timestamp, message: { role, content: [{type,text}] } }
- */
-export async function appendScheduleResult(
-  sessionsDir: string,
-  sessionId: string,
-  payload: ScheduleDeliveryPayload,
-): Promise<void> {
-  const entry = {
-    type: "assistant",
-    uuid: `sched-${payload.scheduleId}-${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `[定时任务 ${payload.scheduleName}] ${payload.result}`,
-        },
-      ],
-    },
-  };
-
-  const filePath = join(sessionsDir, sessionId, "main.jsonl");
-  // Ensure directory exists (session dir may not exist yet)
-  const { mkdir } = await import("node:fs/promises");
-  await mkdir(dirname(filePath), { recursive: true });
-  await appendFile(filePath, JSON.stringify(entry) + "\n", "utf8");
+  broadcast({ type: "notification.created", notification });
+  broadcast({
+    type: "schedule.run.completed",
+    scheduleId: payload.scheduleId,
+    runId: payload.runId,
+    status: payload.status,
+  });
+  return notification;
 }

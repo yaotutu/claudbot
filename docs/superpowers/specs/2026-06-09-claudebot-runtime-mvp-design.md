@@ -415,7 +415,8 @@ Outgoing server messages:
 - `agent.status`
 - `agent.turn_done`
 - `agent.error`
-- `schedule.delivered`
+- `notification.created`
+- `schedule.run.completed`
 
 The exact JSON envelope can be adjusted during implementation to minimize React migration work, but the behavior above is fixed.
 
