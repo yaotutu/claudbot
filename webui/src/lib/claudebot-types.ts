@@ -78,6 +78,13 @@ export type ScheduleRunRecord = {
   error: string;
 };
 
+export type ScheduleRunStartResult = {
+  started: boolean;
+  runId: string;
+  scheduleId: string;
+  status: ScheduleRunRecord["status"];
+};
+
 export type DeliveryChannel =
   | { type: "webui_inbox"; scope: "global" | "agent"; agentId?: string }
   | { type: "telegram"; chatId: string }

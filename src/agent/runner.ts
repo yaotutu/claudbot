@@ -1,7 +1,7 @@
 // ClaudeRunner: thin wrapper around @anthropic-ai/claude-agent-sdk query() that
 // normalizes the streaming event format into the gateway's wire format.
 
-import { createClaudebotSdkMcpServer } from "../tools/sdk-adapter.ts";
+import { createClaudebotSdkMcpServer } from "../tools/sdk-mcp-server.ts";
 import type { ToolContext } from "../tools/types.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import { buildSystemPrompt, type PromptInputs } from "./prompt.ts";
@@ -183,4 +183,3 @@ function assistantContentToEvent(c: AssistantContent | UserContent, sid?: string
   if (c.type === "tool_use") return [{ type: "tool_start", id: c.id, name: c.name, input: c.input, sessionId: sid }];
   return [];
 }
-

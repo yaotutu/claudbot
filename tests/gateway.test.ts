@@ -202,7 +202,7 @@ describe("gateway HTTP", () => {
       services,
     );
     expect(activate.status).toBe(200);
-    expect(await activate.json()).toEqual({ lastActiveSessionId: null });
+    expect(await activate.json()).toEqual({ activeSessionId: null });
     expect((await services.runtimeState.get()).lastActiveSessionId).toBe("");
   });
 
@@ -224,18 +224,33 @@ describe("gateway HTTP", () => {
     expect(put2.status).toBe(409);
   });
 
-  test("POST /api/schedules/:id/run-now records a run", async () => {
-    const { services } = await makeServices(makeRecordingQueryFactory([]));
+  test("POST /api/schedules/:id/run-now starts a run without waiting for agent execution", async () => {
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    const factory: QueryFactory = async function* () {
+      await blocker;
+      yield { type: "result", session_id: "sched-fast-return", result: "done", is_error: false } as SdkMessage;
+    };
+    const { services } = await makeServices(factory);
     const sched = await services.storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "x" });
-    const res = await handleHttp(
+    const pending = handleHttp(
       new Request(`http://x/api/schedules/${sched.id}/run-now`, { method: "POST" }),
       new URL(`http://x/api/schedules/${sched.id}/run-now`),
       services,
     );
+
+    const res = await Promise.race([
+      pending,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+
+    release();
+    expect(res).not.toBe("timeout");
+    if (res === "timeout") return;
     expect(res.status).toBe(200);
-    const run = await res.json() as { status: string; scheduleId: string };
-    // Default executor is wired in Task 12; for now the run is recorded (succeeded or failed).
-    expect(["succeeded", "failed"]).toContain(run.status);
+    const run = await res.json() as { started: boolean; runId: string; status: string; scheduleId: string };
+    expect(run.started).toBe(true);
+    expect(run.status).toBe("running");
     expect(run.scheduleId).toBe(sched.id);
   });
 

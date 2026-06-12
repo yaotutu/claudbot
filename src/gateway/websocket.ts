@@ -6,7 +6,7 @@ import type { SessionSummaryWire, WsClientMessage, WsServerMessage } from "./pro
 import type { NormalizedEvent } from "../agent/events.ts";
 
 // SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
-// long so the adapter mirror has a chance to flush before we ack the WebUI.
+// long so the SDK JSONL mirror has a chance to flush before we ack the WebUI.
 // If SDK adds a flush() signal in the future, replace this with that.
 const MIRROR_FLUSH_SETTLE_MS = 50;
 

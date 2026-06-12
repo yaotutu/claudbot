@@ -8,6 +8,12 @@ import type { SchedulerStore } from "./store.ts";
 import type { ScheduleRecord, ScheduleRunRecord } from "./types.ts";
 
 export type ScheduleExecutor = (schedule: ScheduleRecord, run: ScheduleRunRecord) => Promise<string>;
+export type ScheduleRunStartResult = {
+  started: boolean;
+  runId: string;
+  scheduleId: string;
+  status: ScheduleRunRecord["status"];
+};
 
 const STALE_RUNNING_MS = 2 * 60 * 60 * 1000;
 
@@ -20,12 +26,17 @@ function now(): string {
  * Reads the store fresh, updates only its own schedule record, writes back.
  * Safe to call in parallel for different schedules.
  */
-async function runSchedule(
+type StartedScheduleRun = {
+  run: ScheduleRunRecord;
+  completion?: Promise<ScheduleRunRecord>;
+};
+
+async function startScheduleRun(
   scheduleId: string,
   store: SchedulerStore,
   executor: ScheduleExecutor,
   activeRuns: Set<string>,
-): Promise<ScheduleRunRecord> {
+): Promise<StartedScheduleRun> {
   const start = now();
   const run: ScheduleRunRecord = {
     id: newId("run"),
@@ -41,7 +52,7 @@ async function runSchedule(
     run.status = "skipped_running";
     run.finishedAt = now();
     await recordSkippedRun(store, scheduleId, run, "already running");
-    return run;
+    return { run };
   }
 
   // Read fresh from store
@@ -52,14 +63,14 @@ async function runSchedule(
     run.error = `schedule not found: ${scheduleId}`;
     run.finishedAt = now();
     await store.appendRun(run);
-    return run;
+    return { run };
   }
 
   if (schedule.state.running && !isStaleRunning(schedule)) {
     run.status = "skipped_running";
     run.finishedAt = now();
     await recordSkippedRun(store, scheduleId, run, "already running");
-    return run;
+    return { run };
   }
 
   if (schedule.state.running) {
@@ -77,6 +88,27 @@ async function runSchedule(
     await store.saveSchedules(schedules);
     await store.appendRun(run);
 
+    return {
+      run,
+      completion: finishScheduleRun(scheduleId, start, schedule, schedules, run, store, executor, activeRuns),
+    };
+  } catch (error) {
+    activeRuns.delete(scheduleId);
+    throw error;
+  }
+}
+
+async function finishScheduleRun(
+  scheduleId: string,
+  start: string,
+  schedule: ScheduleRecord,
+  schedules: ScheduleRecord[],
+  run: ScheduleRunRecord,
+  store: SchedulerStore,
+  executor: ScheduleExecutor,
+  activeRuns: Set<string>,
+): Promise<ScheduleRunRecord> {
+  try {
     try {
       run.result = await executor(schedule, run);
       run.status = "succeeded";
@@ -106,10 +138,20 @@ async function runSchedule(
       }
       await store.updateRun(run);
     }
+    return run;
   } finally {
     activeRuns.delete(scheduleId);
   }
-  return run;
+}
+
+async function runSchedule(
+  scheduleId: string,
+  store: SchedulerStore,
+  executor: ScheduleExecutor,
+  activeRuns: Set<string>,
+): Promise<ScheduleRunRecord> {
+  const started = await startScheduleRun(scheduleId, store, executor, activeRuns);
+  return started.completion ? await started.completion : started.run;
 }
 
 async function recordSkippedRun(
@@ -146,6 +188,22 @@ export function createSchedulerTrigger(store: SchedulerStore, executor: Schedule
     /** Run a specific schedule by id immediately. */
     async runNow(id: string): Promise<ScheduleRunRecord> {
       return runSchedule(id, store, executor, activeRuns);
+    },
+
+    /** Start a specific schedule immediately and return once the run is queued. */
+    async startRunNow(id: string): Promise<ScheduleRunStartResult> {
+      const started = await startScheduleRun(id, store, executor, activeRuns);
+      if (started.completion) {
+        void started.completion.catch((err) => {
+          console.error("[scheduler] background run error:", err instanceof Error ? err.message : err);
+        });
+      }
+      return {
+        started: Boolean(started.completion),
+        runId: started.run.id,
+        scheduleId: started.run.scheduleId,
+        status: started.run.status,
+      };
     },
 
     /** Scan for all due schedules and execute them in parallel. */

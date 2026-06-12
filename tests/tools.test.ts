@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
 import { ToolRegistry } from "../src/tools/registry.ts";
-import { createClaudebotSdkMcpServer } from "../src/tools/sdk-adapter.ts";
+import { createClaudebotSdkMcpServer } from "../src/tools/sdk-mcp-server.ts";
 import type { ToolContext } from "../src/tools/types.ts";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
@@ -98,7 +98,7 @@ describe("tool registry", () => {
     expect(statuses).toContain("failed");
   });
 
-  test("sdk adapter creates in-process mcp server", () => {
+  test("SDK MCP server exposes native tools in-process", () => {
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registry.register({
       name: "echo",

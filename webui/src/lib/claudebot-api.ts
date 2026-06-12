@@ -4,6 +4,7 @@ import type {
   RuntimeInfo,
   ScheduleRecord,
   ScheduleRunRecord,
+  ScheduleRunStartResult,
   SessionSummary,
   ThreadMessage,
   UpdateSchedulePayload,
@@ -94,8 +95,8 @@ export async function deleteSchedule(scheduleId: string, base = ""): Promise<boo
   return body.deleted === scheduleId;
 }
 
-export async function runScheduleNow(scheduleId: string, base = ""): Promise<ScheduleRunRecord> {
-  return request<ScheduleRunRecord>(`${base}/api/schedules/${encodeURIComponent(scheduleId)}/run-now`, { method: "POST" });
+export async function runScheduleNow(scheduleId: string, base = ""): Promise<ScheduleRunStartResult> {
+  return request<ScheduleRunStartResult>(`${base}/api/schedules/${encodeURIComponent(scheduleId)}/run-now`, { method: "POST" });
 }
 
 export async function fetchScheduleRuns(scheduleId?: string, base = ""): Promise<ScheduleRunRecord[]> {
@@ -114,22 +115,14 @@ export async function markNotificationsRead(base = ""): Promise<number> {
 
 function normalizeBootstrap(raw: unknown): WebuiBootstrap {
   const body = isRecord(raw) ? raw : {};
-  const runtime = isRecord(body.runtime)
-    ? body.runtime as RuntimeInfo
-    : legacyRuntime(body);
-  const ws = isRecord(body.ws)
-    ? body.ws as { path: string }
-    : { path: typeof body.ws_path === "string" ? body.ws_path : "/ws" };
+  if (!isRuntimeInfo(body.runtime)) throw new Error("Invalid claudebot bootstrap runtime");
+  if (!isRecord(body.ws) || typeof body.ws.path !== "string") throw new Error("Invalid claudebot bootstrap websocket path");
   return {
-    runtime,
-    ws,
+    runtime: body.runtime,
+    ws: { path: body.ws.path },
     sessions: Array.isArray(body.sessions) ? body.sessions as SessionSummary[] : [],
     activeSessionId: normalizeSessionId(
-      typeof body.activeSessionId === "string"
-        ? body.activeSessionId
-        : typeof body.lastActiveSessionId === "string"
-          ? body.lastActiveSessionId
-          : null,
+      typeof body.activeSessionId === "string" ? body.activeSessionId : null,
     ),
   };
 }
@@ -140,20 +133,17 @@ function normalizeSessionId(sessionId: string | null): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function legacyRuntime(body: Record<string, unknown>): RuntimeInfo {
-  const config = isRecord(body.config) ? body.config : {};
-  const gateway = isRecord(config.gateway) ? config.gateway as RuntimeInfo["gateway"] : { host: "127.0.0.1", port: 18790 };
-  const claudeCode = isRecord(config.claudeCode) ? config.claudeCode : {};
-  const workspace = isRecord(config.workspace) && typeof config.workspace.path === "string" ? config.workspace.path : "";
-  return {
-    home: typeof config.home === "string" ? config.home : "",
-    workspace,
-    gateway,
-    model: typeof body.model_name === "string" ? body.model_name : typeof claudeCode.model === "string" ? claudeCode.model : "",
-    permissionMode: typeof claudeCode.permissionMode === "string" ? claudeCode.permissionMode : "",
-  };
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isRuntimeInfo(value: unknown): value is RuntimeInfo {
+  if (!isRecord(value)) return false;
+  return typeof value.home === "string"
+    && typeof value.workspace === "string"
+    && isRecord(value.gateway)
+    && typeof value.gateway.host === "string"
+    && typeof value.gateway.port === "number"
+    && typeof value.model === "string"
+    && typeof value.permissionMode === "string";
 }

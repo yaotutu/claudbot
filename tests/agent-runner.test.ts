@@ -16,7 +16,7 @@ import type { NormalizedEvent, SdkMessage } from "../src/agent/events.ts";
 
 // Capture every call to the mocked SDK so individual tests can assert on what
 // was passed. We mock the whole module because `makeRealQueryFactory` and the
-// tool-adapter both pull from `@anthropic-ai/claude-agent-sdk`.
+// SDK MCP server bridge both pull from `@anthropic-ai/claude-agent-sdk`.
 let captured: { args: unknown; options: Record<string, unknown> | undefined } = { args: undefined, options: undefined };
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (args: { prompt: unknown; options: Record<string, unknown> }) => {

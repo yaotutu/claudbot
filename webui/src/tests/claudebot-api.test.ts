@@ -63,7 +63,7 @@ describe("claudebot native API client", () => {
     expect(boot.activeSessionId).toBe("s1");
   });
 
-  it("normalizes an empty lastActiveSessionId to null", async () => {
+  it("normalizes an empty activeSessionId to null", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       runtime: {
         home: "/tmp/home",
@@ -72,14 +72,31 @@ describe("claudebot native API client", () => {
         model: "glm-5.1",
         permissionMode: "bypassPermissions",
       },
-      ws_path: "/ws",
+      ws: { path: "/ws" },
       sessions: [],
-      lastActiveSessionId: "",
+      activeSessionId: "",
     })));
 
     const boot = await fetchBootstrap();
 
     expect(boot.activeSessionId).toBeNull();
+  });
+
+  it("rejects legacy bootstrap shapes instead of adapting old contracts", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      config: {
+        home: "/tmp/home",
+        workspace: { path: "/tmp/home/workspace" },
+        gateway: { host: "127.0.0.1", port: 18790 },
+        claudeCode: { model: "glm-5.1", permissionMode: "bypassPermissions" },
+      },
+      model_name: "glm-5.1",
+      ws_path: "/ws",
+      sessions: [],
+      lastActiveSessionId: "s1",
+    })));
+
+    await expect(fetchBootstrap()).rejects.toThrow(/bootstrap/i);
   });
 
   it("listSessions reads canonical summaries", async () => {
@@ -131,13 +148,14 @@ describe("claudebot native API client", () => {
         return jsonResponse([{ id: "run_1", scheduleId: "sch_1", startedAt: "2026-06-11T00:00:00.000Z", finishedAt: null, status: "running", result: "", error: "" }]);
       }
       if (String(url) === "/api/schedules/sch_1" && init?.method === "DELETE") return jsonResponse({ deleted: "sch_1" });
+      if (String(url) === "/api/schedules/sch_1/run-now" && init?.method === "POST") return jsonResponse({ started: true, runId: "run_1", scheduleId: "sch_1", status: "running" });
       return jsonResponse({ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: null, lastError: null, runCount: 0, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" });
     }));
 
     expect((await listSchedules())[0]?.id).toBe("sch_1");
     await createSchedule({ name: "daily", message: "check", cronExpr: "* * * * *", timezone: "UTC" });
     await updateSchedule("sch_1", { enabled: false, message: "updated" });
-    await runScheduleNow("sch_1");
+    await expect(runScheduleNow("sch_1")).resolves.toEqual({ started: true, runId: "run_1", scheduleId: "sch_1", status: "running" });
     expect((await fetchScheduleRuns("sch_1"))[0]?.id).toBe("run_1");
     expect(await deleteSchedule("sch_1")).toBe(true);
 

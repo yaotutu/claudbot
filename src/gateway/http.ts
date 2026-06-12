@@ -35,9 +35,8 @@ export async function handleHttp(
           home: services.paths.home,
         },
         runtime: runtimeInfo(services),
-        model_name: services.config.claudeCode.model,
-        ws_path: "/ws",
-        lastActiveSessionId: await services.sessions.getActiveSessionId(),
+        ws: { path: "/ws" },
+        activeSessionId: await services.sessions.getActiveSessionId(),
         sessions: summaries,
       });
     }
@@ -79,7 +78,7 @@ export async function handleHttp(
       }
       if (sub === "/activate" && method === "POST") {
         const activeId = await services.sessions.activate(id);
-        return json(200, { lastActiveSessionId: activeId });
+        return json(200, { activeSessionId: activeId });
       }
     }
 
@@ -182,8 +181,8 @@ export async function handleHttp(
     if (scheduleRunMatch && method === "POST") {
       const id = scheduleRunMatch[1];
       try {
-        const run = await services.trigger.runNow(id);
-        return json(200, run);
+        const started = await services.trigger.startRunNow(id);
+        return json(200, started);
       } catch (err) {
         return json(400, { error: err instanceof Error ? err.message : String(err) });
       }
