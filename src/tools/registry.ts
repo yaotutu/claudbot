@@ -1,4 +1,4 @@
-import type { NativeTool, ToolContext } from "./types.ts";
+import type { NativeTool, ToolContext, ToolPrompt } from "./types.ts";
 import { resolveToolPolicy, type ToolPermissionConfig } from "./permissions.ts";
 import { ToolAuditLog } from "./audit.ts";
 
@@ -20,6 +20,12 @@ export class ToolRegistry {
 
   list(): NativeTool<any, any>[] {
     return [...this.tools.values()];
+  }
+
+  getPromptSections(): ToolPrompt[] {
+    return this.list()
+      .flatMap((tool) => tool.prompt ? [tool.prompt] : [])
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
   }
 
   async execute(name: string, rawInput: unknown, context: ToolContext): Promise<unknown> {

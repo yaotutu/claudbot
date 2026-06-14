@@ -17,6 +17,15 @@ export function registerAgentFileTools(registry: ToolRegistry, deps: { profile: 
   registry.register({
     name: "agent_file_read",
     description: "Read an agent file (user.md, soul.md, or memory.json). Returns content and a version hash for optimistic concurrency.",
+    prompt: {
+      section: "Agent profile files",
+      priority: 30,
+      content: [
+        "Use agent_file_read and agent_file_update to inspect or edit user.md, soul.md, or memory.json.",
+        "agent_file_update requires an expected version hash; read the target file first and pass the returned hash.",
+        "Prefer memory tools for small durable facts. Use profile files for larger user-controlled profile or assistant behavior text.",
+      ].join("\n"),
+    },
     inputSchema: z.object({ name: z.string().min(1) }),
     execute: async (input) => {
       assertAllowed(input.name);

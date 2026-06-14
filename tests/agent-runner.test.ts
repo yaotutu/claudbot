@@ -10,9 +10,11 @@ import { AgentProfileStore } from "../src/agent/profile.ts";
 import { ToolRegistry } from "../src/tools/registry.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
+import { registerSchedulerTools } from "../src/tools/builtin/scheduler.ts";
 import { MemoryStore } from "../src/memory/store.ts";
 import { createSdkJsonlSessionStore } from "../src/sessions/sdk-jsonl-store.ts";
 import type { NormalizedEvent, SdkMessage } from "../src/agent/events.ts";
+import type { ScheduleRecord, ScheduleRunRecord } from "../src/scheduler/types.ts";
 
 // Capture every call to the mocked SDK so individual tests can assert on what
 // was passed. We mock the whole module because `makeRealQueryFactory` and the
@@ -42,6 +44,48 @@ function loadFixture(name: string): SdkMessage {
 function makeQueryFactory(messages: unknown[]): QueryFactory {
   return async function* () {
     for (const m of messages) yield m;
+  };
+}
+
+function makeScheduleRecord(patch: Partial<ScheduleRecord> = {}): ScheduleRecord {
+  const now = "2026-06-09T00:00:00.000Z";
+  return {
+    id: "sch_1",
+    name: "Test schedule",
+    enabled: true,
+    kind: "cron",
+    cronExpr: "0 9 * * *",
+    at: null,
+    everyMs: null,
+    timezone: "UTC",
+    message: "test",
+    deleteAfterRun: false,
+    state: {
+      nextRunAt: now,
+      lastRunAt: null,
+      lastStatus: null,
+      lastError: null,
+      runCount: 0,
+      running: false,
+      runningStartedAt: null,
+      lastSkippedReason: null,
+    },
+    createdAt: now,
+    updatedAt: now,
+    ...patch,
+  };
+}
+
+function makeScheduleRunRecord(patch: Partial<ScheduleRunRecord> = {}): ScheduleRunRecord {
+  return {
+    id: "run_1",
+    scheduleId: "sch_1",
+    startedAt: "2026-06-09T00:00:00.000Z",
+    finishedAt: null,
+    status: "running",
+    result: "",
+    error: "",
+    ...patch,
   };
 }
 
@@ -83,8 +127,36 @@ describe("prompt builder", () => {
     expect(prompt).toContain("sess_1");
     expect(prompt).toContain("I am a software engineer.");
     expect(prompt).toContain("I am a helpful assistant.");
-    expect(prompt).toContain("memory_create");
-    expect(prompt).toContain("schedule_create");
+    expect(prompt).toContain("No native tools are currently available.");
+  });
+
+  test("embeds tool-maintained prompt sections without legacy schedule tool names", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-prompt-tools-"));
+    const prompt = await buildSystemPrompt({
+      home: dir,
+      workspacePath: join(dir, "ws"),
+      timezone: "Asia/Shanghai",
+      source: "user_turn",
+      userFile: join(dir, "missing-user.md"),
+      soulFile: join(dir, "missing-soul.md"),
+      now: new Date("2026-06-09T00:00:00.000Z"),
+      toolPrompts: [
+        {
+          section: "Scheduled tasks",
+          content: "Use cron with action=add/list/update/remove/run.",
+          priority: 20,
+        },
+      ],
+    });
+
+    expect(prompt).toContain("## Scheduled tasks");
+    expect(prompt).toContain("Use cron with action=add/list/update/remove/run.");
+    expect(prompt).not.toContain("schedule_create");
+    expect(prompt).not.toContain("schedule_list");
+    expect(prompt).not.toContain("schedule_update");
+    expect(prompt).not.toContain("schedule_delete");
+    expect(prompt).not.toContain("schedule_set_enabled");
+    expect(prompt).not.toContain("schedule_run_now");
   });
 });
 
@@ -109,6 +181,40 @@ describe("claude runner normalization", () => {
     const text = events.find((e) => e.type === "text_delta");
     expect(text).toBeDefined();
     if (text && text.type === "text_delta") expect(text.text.length).toBeGreaterThan(0);
+  });
+
+  test("injects prompt sections declared by registered tools", async () => {
+    let capturedSystemPrompt = "";
+    const schedule = makeScheduleRecord();
+    const storeOps = {
+      create: async () => schedule,
+      list: async () => [],
+      update: async () => schedule,
+      delete: async () => undefined,
+      setEnabled: async () => schedule,
+    };
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registerSchedulerTools(registry, {
+      storeOps,
+      getTrigger: () => ({
+        runNow: async () => makeScheduleRunRecord(),
+        startRunNow: async () => ({ started: true, runId: "run_1", scheduleId: "sch_1", status: "running" }),
+        tick: async () => [],
+        start: () => undefined,
+        stop: () => undefined,
+      }),
+    });
+    const runner = new ClaudeRunner(baseDeps(registry), async function* ({ systemPrompt }) {
+      capturedSystemPrompt = systemPrompt;
+    });
+
+    await collectEvents(runner.run({ prompt: "remind me tomorrow" }));
+
+    expect(capturedSystemPrompt).toContain("## Scheduled tasks");
+    expect(capturedSystemPrompt).toContain("Use cron");
+    expect(capturedSystemPrompt).toContain("action=add");
+    expect(capturedSystemPrompt).not.toContain("schedule_create");
+    expect(capturedSystemPrompt).not.toContain("schedule_run_now");
   });
 
   test("thinking assistant -> thinking_delta", async () => {

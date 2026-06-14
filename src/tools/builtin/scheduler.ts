@@ -34,6 +34,16 @@ export function registerSchedulerTools(
       '- kind="every", everyMs=<milliseconds> — recurring at fixed interval. Example: { kind:"every", everyMs:300000 } for every 5 minutes.',
       '- kind="cron", cronExpr="<expression>", timezone="<IANA>" — cron schedule. Example: { kind:"cron", cronExpr:"0 9 * * *", timezone:"Asia/Shanghai" } for daily at 9am.',
     ].join("\n"),
+    prompt: {
+      section: "Scheduled tasks",
+      priority: 20,
+      content: [
+        "Use cron for reminders, timers, scheduled tasks, delayed follow-ups, recurring work, and user-requested background checks.",
+        "Do not emulate scheduling with sleep, polling, repeated chat messages, or any other workaround.",
+        "Use action=add to create tasks, action=list to inspect tasks, action=update to change schedule details or enabled status, action=remove to delete tasks, and action=run to execute one immediately.",
+        "Scheduled tasks run as isolated Claude turns and deliver results through notifications, not through the current chat session.",
+      ].join("\n"),
+    },
     inputSchema: z.object({
       action: CronActionSchema,
       // --- add fields ---

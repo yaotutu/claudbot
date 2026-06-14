@@ -43,7 +43,10 @@ export class ClaudeRunner {
       scheduleRunId: this.deps.promptInputs.scheduleRunId,
       services: null,
     };
-    const systemPrompt = await buildSystemPrompt(this.deps.promptInputs);
+    const systemPrompt = await buildSystemPrompt({
+      ...this.deps.promptInputs,
+      toolPrompts: this.deps.registry.getPromptSections(),
+    });
     const stream = this.queryFactory({
       prompt: opts.prompt,
       resumeSessionId: opts.resumeSessionId,

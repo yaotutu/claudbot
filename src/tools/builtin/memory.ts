@@ -15,6 +15,16 @@ export function registerMemoryTools(registry: ToolRegistry, deps: { memory: Memo
   registry.register({
     name: "memory_read",
     description: "Read a memory entry by id.",
+    prompt: {
+      section: "Memory",
+      priority: 10,
+      content: [
+        "Use memory tools for durable user preferences, stable facts, and long-term notes that should help future sessions.",
+        "Do not store transient chat details, temporary task state, guesses, or sensitive secrets unless the user explicitly asks.",
+        "Keep memory entries concise, specific, and useful outside the current conversation.",
+        "Use memory_search before creating a memory when a similar fact may already exist; update existing entries instead of duplicating them.",
+      ].join("\n"),
+    },
     inputSchema: z.object({ id: z.string().min(1) }),
     execute: async (input) => memory.get(input.id),
   });

@@ -32,6 +32,35 @@ describe("tool registry", () => {
     expect(result).toEqual({ text: "ok" });
   });
 
+  test("collects tool prompt sections in priority order", () => {
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registry.register({
+      name: "no_prompt",
+      description: "no prompt",
+      inputSchema: z.object({}),
+      execute: async () => ({}),
+    });
+    registry.register({
+      name: "later",
+      description: "later",
+      inputSchema: z.object({}),
+      prompt: { section: "Later", content: "later instructions", priority: 20 },
+      execute: async () => ({}),
+    });
+    registry.register({
+      name: "first",
+      description: "first",
+      inputSchema: z.object({}),
+      prompt: { section: "First", content: "first instructions", priority: 10 },
+      execute: async () => ({}),
+    });
+
+    expect(registry.getPromptSections()).toEqual([
+      { section: "First", content: "first instructions", priority: 10 },
+      { section: "Later", content: "later instructions", priority: 20 },
+    ]);
+  });
+
   test("denies a denied tool", async () => {
     const registry = new ToolRegistry({ defaultPolicy: "deny", overrides: {} });
     registry.register({
