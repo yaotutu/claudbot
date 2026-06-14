@@ -16,10 +16,11 @@ Server (Bun runtime, ESM, strict TS):
 
 ```bash
 bun install              # server deps
-bun run dev              # bun --watch src/server.ts (gateway only, on :18790)
-bun run dev:all          # gateway (:18790) + WebUI (:5173) concurrently
+bun run dev              # gateway (:18790) + WebUI (:5173) concurrently
+bun run dev:server       # bun --watch src/server.ts (gateway only, on :18790)
+bun run dev:webui        # Vite WebUI only (:5173)
 bun run start            # production
-bun test                 # bun test, runs tests/*.test.ts
+bun run test             # bun test, backend/runtime tests only
 bunx tsc --noEmit        # typecheck
 ```
 
@@ -69,12 +70,14 @@ WebUI ──HTTP/WS──▶ src/server.ts (Bun.serve)
                                    │
                                    ▼
                    src/runtime/services.ts (ServiceContainer)
-                       ├─ sessionStore  (ClaudebotSessionStore — SDK SessionStore adapter)
+                       ├─ sdkSessionStore  (SdkJsonlSessionStore — SDK SessionStore adapter)
+                       ├─ sessions      (ClaudebotSessionService — JSONL read model/actions)
                        ├─ runtimeState  (lastActiveSessionId — SDK session UUID)
                        ├─ profile       (user.md / soul.md / memory.json)
                        ├─ memory        (MemoryStore)
+                       ├─ notificationStore (WebUI task/result notifications)
                        ├─ schedulerStore + storeOps  (CRUD)
-                       ├─ notifier      (ScheduleNotifier — delivery bridge)
+                       ├─ notifier      (ScheduleNotifier — WebUI notification bridge)
                        ├─ trigger       (SchedulerTrigger — cron loop + execution)
                        ├─ toolRegistry  (ToolRegistry)
                        └─ makeRunner()  (ClaudeRunner)
@@ -90,16 +93,16 @@ WebUI ──HTTP/WS──▶ src/server.ts (Bun.serve)
 
 Key boundaries:
 
-- **`src/runtime/services.ts`** — wires a `ServiceContainer` per process. Assembly is linear (no cycles): Store → StoreOps → Registry → queryFactory → Trigger. The trigger's executor needs `queryFactory`, which needs the registry, which only needs `storeOps` + a lazy `getTrigger()` getter. The `ScheduleNotifier` starts as a no-op and is wired to real delivery (WS broadcast + JSONL fallback) in `server.ts` after WS handlers are created.
-- **`src/agent/runner.ts`** — thin wrapper over the SDK's `query()`. Normalizes SDK messages into the gateway wire events (`text_delta`, `thinking_delta`, `tool_start`, `tool_result`, `status`, `turn_done`, `error`). Critically, non-Anthropic endpoints (e.g. BigModel's `glm-5.1`) return the whole assistant content in one block — `maybeChunk` slices `text_delta` and `thinking_delta` into ~6-char chunks with a 12ms pause so the UI streams instead of flashing the final answer. If streaming looks broken, check this first.
-- **`src/gateway/websocket.ts`** — incoming `chat.user_message` triggers `runUserTurn`, which forwards every `NormalizedEvent` to the client via `forward()`. The WebSocket handler uses an **explicit `.catch`** on `handleClientMessage` (not `void …`) — Bun treats unhandled rejections as fatal. Do not refactor to `void` here.
-- **`src/tools/sdk-adapter.ts`** — wraps the `ToolRegistry` in `createSdkMcpServer` (in-process MCP). Tools are validated, authorized, audited, then executed. Do not introduce a separate subprocess MCP server.
+- **`src/runtime/services.ts`** — wires a `ServiceContainer` per process. Assembly is linear (no cycles): Store → StoreOps → Registry → queryFactory → Trigger. The trigger's executor needs `queryFactory`, which needs the registry, which only needs `storeOps` + a lazy `getTrigger()` getter. The `ScheduleNotifier` starts as a no-op and is wired to real WebUI notification delivery in `server.ts` after WS handlers are created.
+- **`src/agent/runner.ts`** — thin wrapper over the SDK's `query()`. Normalizes SDK messages into gateway events (`text_delta`, `thinking_delta`, `tool_start`, `tool_result`, `status`, `turn_done`, `error`).
+- **`src/gateway/websocket.ts`** — incoming `chat.send` triggers `runUserTurn`, which forwards every `NormalizedEvent` as claudebot-native frames (`run.delta`, `run.tool`, `run.completed`, etc.). The WebSocket handler uses an **explicit `.catch`** on `handleClientMessage` (not `void …`) — Bun treats unhandled rejections as fatal.
+- **`src/tools/sdk-mcp-server.ts`** — wraps the `ToolRegistry` in `createSdkMcpServer` (in-process MCP). Tools are validated, authorized, audited, then executed. Do not introduce a separate subprocess MCP server.
 - **`src/utils/fs.ts`** — every JSON/text write goes through `writeJsonAtomic` / `writeTextAtomic`. The temp filename includes `pid.counter.timestamp.random` to prevent the millisecond-collision race that bit `setLastActiveSession` under concurrent writes.
 - **`src/agent/profile.ts`** — `user.md`, `soul.md`, `memory.json` use SHA256 version stamps. `updateFile` returns 409 (well, throws — the HTTP layer maps it) if `expectedVersion` is stale.
 
 ## Session storage model
 
-Session messages are owned entirely by the Claude Agent SDK; the app layer does **not** store message content. The `ClaudebotSessionStore` adapter (`src/sessions/adapter.ts`) implements SDK's `SessionStore` interface and mirrors every transcript write from the SDK subprocess into claudebot's home.
+Session messages are owned entirely by the Claude Agent SDK; the app layer does **not** store message content. The `SdkJsonlSessionStore` adapter (`src/sessions/sdk-jsonl-store.ts`) implements SDK's `SessionStore` interface and mirrors every transcript write from the SDK subprocess into claudebot's home. Business reads and actions go through `ClaudebotSessionService` (`src/sessions/session-service.ts`) and its JSONL read model.
 
 Layout under the home directory:
 
@@ -118,33 +121,30 @@ Layout under the home directory:
         agent-<id>.jsonl
 ```
 
-`sessionId` is **the SDK's UUID** — there is no separate app-layer session id. `runtimeState.lastActiveSessionId` is a SDK UUID (or `null` if the user has never sent a message). The `ClaudebotSessionStore` is the only writer of the `.jsonl` files; the gateway reads them via `parseJsonlToUIMessages` (`src/sessions/jsonl-parser.ts`) when WebUI requests history.
+`sessionId` is **the SDK's UUID** — there is no separate app-layer session id. `runtimeState.lastActiveSessionId` is a SDK UUID (or empty when the user has no active persisted session). The SDK session store is the transcript writer; the gateway reads back summaries and messages through `session-read-model.ts` and `parseJsonlToUIMessages()`.
 
 Notes on the implementation:
 
 - **Message count for the session list** (`/webui/bootstrap`) is computed by counting non-empty lines in `main.jsonl`. Don't read the file into memory; `Bun.file(...).text().split("\n")` is fine for current sizes but revisit if session transcripts grow large.
 - **`MIRROR_FLUSH_SETTLE_MS = 50`** in `src/gateway/websocket.ts` is a settle delay between `turn_done` and the WS ack, so the adapter mirror has time to flush under `sessionStoreFlush: 'batched'`. If the SDK exposes a flush signal, replace this with that.
-- The old metadata-only `SessionStore` has been removed. Do not reintroduce an app-layer session store; use `sdkSessions` and the SDK `SessionStore` adapter instead.
+- The old metadata-only `SessionStore` has been removed. Do not reintroduce an app-layer message/session JSON store; use `services.sessions` for business session actions and `services.sdkSessionStore` only as the SDK adapter.
 
 ## WebUI architecture
 
-The WebUI is a Vite + React 18 + Tailwind 3 + shadcn/ui app. The components under `webui/src/components/` (Sidebar, MessageBubble, the `thread/*` shell) are **copied from nanobot** and expect nanobot-shaped data (sessions with `key: "channel:chatId"`, an `InboundEvent` stream, etc.). Three adapter modules translate the claudebot wire shapes into those:
+The WebUI is a Vite + React 18 + Tailwind 3 app using claudebot-native data, not nanobot adapter shapes.
 
-- **`webui/src/lib/bootstrap.ts`** — `fetchBootstrap` calls `GET /webui/bootstrap` and synthesizes the nanobot `BootstrapResponse` shape (token is `""`, no auth).
-- **`webui/src/lib/api.ts`** — REST adapter. Maps claudebot's `{role, content, createdAt, metadata}` to nanobot's `UIMessage`. Stubs features claudebot doesn't have (skills, workspaces, settings, slash commands, file previews) with safe no-ops / 501 errors.
-- **`webui/src/lib/claudebot-client.ts`** — the WS client. Speaks claudebot's `WsClientMessage`/`WsServerMessage` and emits `InboundEvent` to the copied hooks. It tracks `currentChatId` locally and **fans `agent.*` events out by that**, not by `sessionId` on the wire — the wire's `sessionId` *is* the claudebot session id (a SDK UUID). If routing looks wrong, check this fan-out first.
+- **`webui/src/lib/claudebot-api.ts`** — HTTP client for `/webui/bootstrap`, sessions, runtime, schedules, schedule runs, and notifications.
+- **`webui/src/lib/claudebot-ws.ts`** — WebSocket client for claudebot-native frames (`session.created`, `run.delta`, `message.appended`, `notification.created`, etc.).
+- **`webui/src/hooks/useClaudebotSessions.ts`** — session list, draft session creation, active session, rename/delete, and draft-to-SDK-session replacement.
+- **`webui/src/hooks/useClaudebotThread.ts`** — thread history fetch, optimistic user message, streaming assistant deltas, final message replacement, and run errors.
+- **`webui/src/App.tsx`** — top-level composition for bootstrap, WS lifecycle, sidebar, thread, settings/search/skills panels, and task notifications. Keep future feature work from growing this file; prefer focused components/hooks.
 
-The big consumer is **`webui/src/hooks/useClaudebotStream.ts`** (~1100 lines). It receives `InboundEvent`s and renders user/assistant/system bubbles with a streaming cursor (`buffer.current`, `activeAssistantRef`, `closedAssistantStreamIdsRef`). On `send()` it **pre-pends a placeholder assistant bubble with `isStreaming: true`**, so `MessageBubble` renders the `TypingDots` indicator immediately and the user sees activity before the first delta lands. It also drops user-role `message.appended` echoes (the server echoes the user message back; the client adds it optimistically on send — re-dispatching would double-render it).
-
-Two non-obvious things in the boot path (`webui/src/App.tsx`):
-
-- The copied Sidebar renders chrome (Skills, Settings, project controls) that claudebot doesn't implement. The handlers are passed `noop`; clicking does nothing. The header comment explains this.
-- `pickWsUrl` is Vite-dev-aware: in `:5173` it points the WS at the configured gateway port, otherwise it uses the same origin.
+`pickWsUrl` is Vite-dev-aware: in `:5173` it points the WS at the configured gateway port, otherwise it uses the same origin.
 
 ## Operational gotchas
 
 - **No auth.** The gateway binds `0.0.0.0` by default; the WebUI has no token, no login. This is intentional for MVP testing. If you need auth, the spec calls for `token`/`tokenIssueSecret` in config — not implemented yet.
-- **Scheduler is a real executor.** `runScheduledTurn` in `src/runtime/services.ts` dispatches a real `ClaudeRunner.run()` call in a **new one-off session** (no `resumeSessionId`). After execution, the result is delivered via `ScheduleNotifier`: written to the last active session's `.jsonl` (fallback inbox) and broadcast as `message.appended` to all connected WebSocket clients. If there is no active session, the result is only stored in the run record.
+- **Scheduler is a real executor.** `runScheduledTurn` in `src/runtime/services.ts` dispatches a real `ClaudeRunner.run()` call in a **new one-off session** (no `resumeSessionId`). After execution, the result is delivered via `ScheduleNotifier` into WebUI notifications (`notifications.json`) and broadcast as `notification.created` / `schedule.run.completed`. Background task results should not be appended into normal chat sessions.
 - **The webui `README.md` is stale.** It describes a Python/pip packaging flow that no longer applies (claudebot is Bun/TypeScript, not Python). The "just want to use the WebUI?" section is misleading. The accurate boot steps are the ones in this file's Commands section.
 - **`src/spikes/`** — diagnostic scripts from the SDK spike phase. Not part of the runtime; safe to delete if you need a cleanup.
 - **Live Claude SDK verification is blocked** in this environment (no working Anthropic auth for some endpoints). Mocked tests cover the runner, gateway, and stream hook paths. The `maybeChunk` chunker exists specifically to make the BigModel/glm-5.1 endpoint feel streaming; verify any change to it against a live call before shipping.
