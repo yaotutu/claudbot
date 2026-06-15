@@ -3,21 +3,25 @@ import type { RuntimeConfig } from "./schema.ts";
 
 export type RuntimePaths = {
   home: string;
+  configFile: string;
   workspace: string;
-  agentDir: string;
+  profileDir: string;
   userFile: string;
   soulFile: string;
+  memoryDir: string;
   memoryFile: string;
   sessionsDir: string;
-  schedulerDir: string;
+  schedulesDir: string;
   schedulesFile: string;
-  runsFile: string;
+  scheduleRunsDir: string;
   webuiDir: string;
   runtimeStateFile: string;
   notificationsFile: string;
   mediaDir: string;
+  logsDir: string;
   auditDir: string;
   toolAuditFile: string;
+  claudeDir: string;
   sdkConfigDir: string;
 };
 
@@ -25,21 +29,25 @@ export function runtimePaths(config: RuntimeConfig): RuntimePaths {
   const home = config.home;
   return {
     home,
+    configFile: join(home, "config.json"),
     workspace: config.workspace.path,
-    agentDir: join(home, "agent"),
-    userFile: join(home, "agent", "user.md"),
-    soulFile: join(home, "agent", "soul.md"),
-    memoryFile: join(home, "agent", "memory.json"),
+    profileDir: join(home, "profile"),
+    userFile: join(home, "profile", "user.md"),
+    soulFile: join(home, "profile", "soul.md"),
+    memoryDir: join(home, "memory"),
+    memoryFile: join(home, "memory", "memory.json"),
     sessionsDir: join(home, "sessions"),
-    schedulerDir: join(home, "scheduler"),
-    schedulesFile: join(home, "scheduler", "schedules.json"),
-    runsFile: join(home, "scheduler", "runs.json"),
+    schedulesDir: join(home, "schedules"),
+    schedulesFile: join(home, "schedules", "jobs.json"),
+    scheduleRunsDir: join(home, "schedules", "runs"),
     webuiDir: join(home, "webui"),
     runtimeStateFile: join(home, "webui", "runtime_state.json"),
     notificationsFile: join(home, "webui", "notifications.json"),
     mediaDir: join(home, "media"),
+    logsDir: join(home, "logs"),
     auditDir: join(home, "audit"),
     toolAuditFile: join(home, "audit", "tools.jsonl"),
-    sdkConfigDir: join(home, "sdk-config"),
+    claudeDir: join(home, "claude"),
+    sdkConfigDir: join(home, "claude", "config"),
   };
 }

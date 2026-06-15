@@ -27,7 +27,7 @@ function makeCtx(services: unknown, overrides: Partial<ToolContext> = {}): ToolC
 describe("built-in cron tool", () => {
   test("cron add (kind=cron) validates and creates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
@@ -42,7 +42,7 @@ describe("built-in cron tool", () => {
 
   test("cron add (kind=at) creates one-shot", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
@@ -58,7 +58,7 @@ describe("built-in cron tool", () => {
 
   test("cron add rejects bad cron", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
@@ -71,7 +71,7 @@ describe("built-in cron tool", () => {
 
   test("cron run delegates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "hello");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
@@ -85,7 +85,7 @@ describe("built-in cron tool", () => {
 
   test("cron list returns all schedules", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
@@ -99,7 +99,7 @@ describe("built-in cron tool", () => {
 
   test("cron remove deletes a schedule", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "schedules.json"), join(dir, "runs.json"));
+    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
