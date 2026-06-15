@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { formatConfigSource, loadConfig, resolveRuntimeConfig } from "../src/config/loader.ts";
+import { runtimePaths } from "../src/config/paths.ts";
 
 describe("runtime config", () => {
   test("uses default home and workspace", () => {
@@ -74,6 +75,25 @@ describe("runtime config", () => {
     expect(config.channels.webui.enabled).toBe(false);
     expect(config.channels.telegram).toMatchObject({ enabled: true, mode: "polling", botToken: "tg-token", allowedChatIds: ["123"] });
     expect(config.channels.feishu).toMatchObject({ enabled: true, appId: "app-id", allowedChatIds: ["chat-a"] });
+  });
+
+  test("derives user-facing runtime directories from home", () => {
+    const config = resolveRuntimeConfig({ home: "/tmp/bot" }, { homeEnv: "", configDir: "/tmp/cfg" });
+    const paths = runtimePaths(config);
+
+    expect(paths.configFile).toBe("/tmp/bot/config.json");
+    expect(paths.workspace).toBe("/tmp/bot/workspace");
+    expect(paths.profileDir).toBe("/tmp/bot/profile");
+    expect(paths.userFile).toBe("/tmp/bot/profile/user.md");
+    expect(paths.soulFile).toBe("/tmp/bot/profile/soul.md");
+    expect(paths.memoryDir).toBe("/tmp/bot/memory");
+    expect(paths.memoryFile).toBe("/tmp/bot/memory/memory.json");
+    expect(paths.schedulesDir).toBe("/tmp/bot/schedules");
+    expect(paths.schedulesFile).toBe("/tmp/bot/schedules/jobs.json");
+    expect(paths.scheduleRunsDir).toBe("/tmp/bot/schedules/runs");
+    expect(paths.logsDir).toBe("/tmp/bot/logs");
+    expect(paths.claudeDir).toBe("/tmp/bot/claude");
+    expect(paths.sdkConfigDir).toBe("/tmp/bot/claude/config");
   });
 });
 

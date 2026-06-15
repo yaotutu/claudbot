@@ -69,7 +69,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   });
   await profile.init();
   const memory = new MemoryStore(paths.memoryFile);
-  const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.runsFile);
+  const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.scheduleRunsDir);
   const notificationStore = createNotificationStore(paths.notificationsFile);
   const channelBindings = createChannelSessionBindingStore(paths.channelBindingsFile);
   const sessions = createSessionService({ sessionsDir: paths.sessionsDir, runtimeState });
