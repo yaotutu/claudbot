@@ -12,6 +12,42 @@ WebUI 原生数据入口集中在 `webui/src/lib/claudebot-api.ts`、`webui/src/
 
 Settings、Search、Skills 入口需要保留可见反馈。Settings 当前是只读运行状态面板；Search 和 Skills 可以先保持占位反馈，但不能点击无响应。New chat 应先创建本地 draft，会话首条消息发送后由后端 `session.created` remap 到真实 SDK session。
 
+## 运行时目录结构
+
+Claudebot 的运行时目录应区分“实例配置/运行数据”和“Agent 工作区”。默认实例目录是 `~/.claudebot/`，`workspace/` 是 agent 读写项目文件的默认工作区；如果 `config.json` 或环境变量显式覆盖 workspace，则业务运行时数据仍应留在实例目录中。
+
+当前默认布局如下：
+
+```text
+~/.claudebot/
+├── config.json
+├── workspace/
+├── profile/
+│   ├── user.md
+│   └── soul.md
+├── memory/
+│   └── memory.json
+├── sessions/
+│   └── <session-id>/
+│       ├── main.jsonl
+│       └── subagents/
+├── schedules/
+│   ├── jobs.json
+│   └── runs/
+│       └── <run-id>.json
+├── webui/
+│   ├── runtime_state.json
+│   └── notifications.json
+├── media/
+├── logs/
+├── audit/
+│   └── tools.jsonl
+└── claude/
+    └── config/
+```
+
+`src/config/paths.ts` 是这些路径的唯一来源。不要重新引入旧的 `agent/user.md`、`agent/soul.md`、`agent/memory.json`、`scheduler/schedules.json`、`scheduler/runs.json` 或 `sdk-config/` 路径；本项目不为旧目录做兼容、alias 或数据迁移。Profile 文本放在 `profile/`，长期记忆放在 `memory/`，SDK JSONL 会话放在 `sessions/`，定时任务定义放在 `schedules/jobs.json`，每次定时任务执行记录独立写入 `schedules/runs/<run-id>.json`。
+
 ## 构建、测试与开发命令
 
 除非特别说明，命令都从仓库根目录运行。
