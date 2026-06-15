@@ -13,6 +13,10 @@ export type ToolContext = {
   services: unknown;
 };
 
+export type ToolContextRef = {
+  current: ToolContext;
+};
+
 export type ToolPrompt = {
   section: string;
   content: string;

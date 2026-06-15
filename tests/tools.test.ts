@@ -139,4 +139,30 @@ describe("tool registry", () => {
     expect(server).toBeDefined();
     expect(typeof server).toBe("object");
   });
+
+  test("SDK MCP server reads the latest ToolContextRef for each call", async () => {
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const seen: string[] = [];
+    registry.register({
+      name: "ctx_echo",
+      description: "echo context",
+      inputSchema: z.object({}),
+      execute: async (_input, context) => {
+        seen.push(context.sessionId || "");
+        return { sessionId: context.sessionId };
+      },
+    });
+    const contextRef = { current: makeCtx({ sessionId: "s1" }) };
+    const server = createClaudebotSdkMcpServer(registry, contextRef) as unknown as {
+      instance?: { _registeredTools?: Record<string, { handler: (args: unknown) => Promise<unknown> }> };
+    };
+    const tool = server.instance?._registeredTools?.ctx_echo;
+    if (!tool) throw new Error("ctx_echo tool not found");
+
+    await tool.handler({});
+    contextRef.current = makeCtx({ sessionId: "s2" });
+    await tool.handler({});
+
+    expect(seen).toEqual(["s1", "s2"]);
+  });
 });
