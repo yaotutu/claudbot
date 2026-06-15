@@ -4,6 +4,13 @@ import type { ChannelRegistry } from "../registry.ts";
 import { createQqClient } from "./client.ts";
 import type { QqClient, QqConfig, QqMessageEvent } from "./types.ts";
 
+type NormalizedQqMessage = {
+  conversationId: string;
+  senderId: string;
+  groupOpenid?: string;
+  content: string;
+};
+
 export function createQqAdapter(
   services: ServiceContainer,
   config: QqConfig,
@@ -49,12 +56,7 @@ async function handleQqMessage(
   if (!sent.success) await sendProactiveFallback(client, event, result.outbound.content);
 }
 
-function normalizeQqMessage(event: QqMessageEvent): {
-  conversationId: string;
-  senderId: string;
-  groupOpenid?: string;
-  content: string;
-} | null {
+function normalizeQqMessage(event: QqMessageEvent): NormalizedQqMessage | null {
   const content = event.content.trim();
   if (!content) return null;
   if (event.type === "group") {
@@ -77,10 +79,7 @@ function normalizeQqMessage(event: QqMessageEvent): {
   return { conversationId: `c2c:${event.senderId}`, senderId: event.senderId, content };
 }
 
-function isAllowed(
-  config: QqConfig,
-  inbound: { conversationId: string; senderId: string; groupOpenid?: string },
-): boolean {
+function isAllowed(config: QqConfig, inbound: NormalizedQqMessage): boolean {
   const hasAnyAllowList = config.allowedConversationIds.length > 0
     || config.allowedUserIds.length > 0
     || config.allowedGroupOpenids.length > 0;
