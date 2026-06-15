@@ -24,6 +24,57 @@ describe("runtime config", () => {
     );
     expect(config.workspace.path).toBe("/tmp/ws");
   });
+
+  test("channels default to webui enabled and external channels disabled", () => {
+    const config = resolveRuntimeConfig({}, { homeEnv: "", configDir: "/tmp/cfg" });
+    expect(config.channels.webui.enabled).toBe(true);
+    expect(config.channels.telegram).toMatchObject({
+      enabled: false,
+      mode: "webhook",
+      botToken: "",
+      webhookPath: "/channels/telegram/webhook",
+      secretToken: "",
+      allowedChatIds: [],
+    });
+    expect(config.channels.feishu).toMatchObject({
+      enabled: false,
+      appId: "",
+      appSecret: "",
+      verificationToken: "",
+      encryptKey: "",
+      webhookPath: "/channels/feishu/events",
+      allowedChatIds: [],
+    });
+  });
+
+  test("explicit channel config wins", () => {
+    const config = resolveRuntimeConfig({
+      channels: {
+        webui: { enabled: false },
+        telegram: {
+          enabled: true,
+          mode: "polling",
+          botToken: "tg-token",
+          webhookPath: "/tg",
+          secretToken: "tg-secret",
+          allowedChatIds: ["123"],
+        },
+        feishu: {
+          enabled: true,
+          appId: "app-id",
+          appSecret: "app-secret",
+          verificationToken: "verify",
+          encryptKey: "encrypt",
+          webhookPath: "/fs",
+          allowedChatIds: ["chat-a"],
+        },
+      },
+    }, { homeEnv: "", configDir: "/tmp/cfg" });
+
+    expect(config.channels.webui.enabled).toBe(false);
+    expect(config.channels.telegram).toMatchObject({ enabled: true, mode: "polling", botToken: "tg-token", allowedChatIds: ["123"] });
+    expect(config.channels.feishu).toMatchObject({ enabled: true, appId: "app-id", allowedChatIds: ["chat-a"] });
+  });
 });
 
 describe("loadConfig", () => {

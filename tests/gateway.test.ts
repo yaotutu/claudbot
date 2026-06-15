@@ -37,6 +37,40 @@ describe("gateway HTTP", () => {
     expect("sdkSessions" in services).toBe(false);
   });
 
+  test("service container exposes channel session bindings", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+
+    await services.channelBindings.upsert({
+      channel: "telegram",
+      externalConversationId: "chat-1",
+      claudebotSessionId: "sess-1",
+    });
+
+    expect(await services.channelBindings.find("telegram", "chat-1")).toMatchObject({
+      claudebotSessionId: "sess-1",
+    });
+  });
+
+  test("delegates channel HTTP routes before normal API handling", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const registry = {
+      handleHttp: async (_req: Request, url: URL) => {
+        if (url.pathname === "/channels/test") return new Response(JSON.stringify({ handled: true }), { status: 202 });
+        return null;
+      },
+    };
+
+    const res = await handleHttp(
+      new Request("http://x/channels/test", { method: "POST" }),
+      new URL("http://x/channels/test"),
+      services,
+      registry,
+    );
+
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ handled: true });
+  });
+
   test("GET /health returns ok", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
     const res = await handleHttp(new Request("http://x/health"), new URL("http://x/health"), services);
@@ -344,13 +378,12 @@ describe("runUserTurn", () => {
     const { services } = await makeServices(factory);
 
     const sent: unknown[] = [];
-    const fakeWs = {
-      send: (data: string) => sent.push(JSON.parse(data)),
-      data: { sessionId: "", services, send: (m: unknown) => sent.push(m) },
-    } as unknown as Parameters<typeof import("../src/gateway/websocket.ts").runUserTurn>[0];
-
-    const { runUserTurn } = await import("../src/gateway/websocket.ts");
-    await runUserTurn(fakeWs, services, null, "ping", { draftId: "draft-1" });
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "ping", draftId: "draft-1" },
+      { send: (event) => { sent.push(event); } },
+    );
 
     const types = sent.map((m) => (m as { type: string }).type);
     expect(types).toEqual([
@@ -372,20 +405,12 @@ describe("runUserTurn", () => {
     const factory = makeRecordingQueryFactory([init, text, result]);
     const { services } = await makeServices(factory);
 
-    // Stub WebSocket-like object: runUserTurn writes to ws.data.sessionId
-    // after the run, so the fake needs both `send` and a mutable `data`.
     const sent: unknown[] = [];
-    const fakeWs = {
-      send: (data: string) => sent.push(JSON.parse(data)),
-      data: { sessionId: "", services, send: (m: unknown) => sent.push(m) },
-    } as unknown as Parameters<typeof import("../src/gateway/websocket.ts").runUserTurn>[0];
-
-    const { runUserTurn } = await import("../src/gateway/websocket.ts");
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
     await runUserTurn(
-      fakeWs,
       services,
-      null,
-      "hi",
+      { source: "webui", sessionId: null, content: "hi" },
+      { send: (event) => { sent.push(event); } },
     );
 
     // The runner stream is forwarded through the claudebot-native run frames.

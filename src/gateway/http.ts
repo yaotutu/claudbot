@@ -2,6 +2,7 @@
 
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { AgentFileName } from "../agent/profile.ts";
+import type { ChannelRegistry } from "../channels/registry.ts";
 
 export type HttpResult = {
   status: number;
@@ -13,11 +14,15 @@ export async function handleHttp(
   req: Request,
   url: URL,
   services: ServiceContainer,
+  channelRegistry?: Pick<ChannelRegistry, "handleHttp">,
 ): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
 
   try {
+    const channelResponse = await channelRegistry?.handleHttp(req, url);
+    if (channelResponse) return channelResponse;
+
     if (path === "/health" && method === "GET") {
       return json(200, { status: "ok" });
     }

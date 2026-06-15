@@ -31,6 +31,69 @@ const ToolsSchema = z.object({
   permissions: ToolPermissionsSchema,
 });
 
+const WebuiChannelSchema = z.object({
+  enabled: z.boolean().default(true),
+}).default({ enabled: true });
+
+const TelegramChannelSchema = z.object({
+  enabled: z.boolean().default(false),
+  mode: z.enum(["webhook", "polling"]).default("webhook"),
+  botToken: z.string().default(""),
+  webhookPath: z.string().default("/channels/telegram/webhook"),
+  secretToken: z.string().default(""),
+  allowedChatIds: z.array(z.string()).default([]),
+}).default({
+  enabled: false,
+  mode: "webhook",
+  botToken: "",
+  webhookPath: "/channels/telegram/webhook",
+  secretToken: "",
+  allowedChatIds: [],
+});
+
+const FeishuChannelSchema = z.object({
+  enabled: z.boolean().default(false),
+  appId: z.string().default(""),
+  appSecret: z.string().default(""),
+  verificationToken: z.string().default(""),
+  encryptKey: z.string().default(""),
+  webhookPath: z.string().default("/channels/feishu/events"),
+  allowedChatIds: z.array(z.string()).default([]),
+}).default({
+  enabled: false,
+  appId: "",
+  appSecret: "",
+  verificationToken: "",
+  encryptKey: "",
+  webhookPath: "/channels/feishu/events",
+  allowedChatIds: [],
+});
+
+const ChannelsSchema = z.object({
+  webui: WebuiChannelSchema,
+  telegram: TelegramChannelSchema,
+  feishu: FeishuChannelSchema,
+}).default({
+  webui: { enabled: true },
+  telegram: {
+    enabled: false,
+    mode: "webhook",
+    botToken: "",
+    webhookPath: "/channels/telegram/webhook",
+    secretToken: "",
+    allowedChatIds: [],
+  },
+  feishu: {
+    enabled: false,
+    appId: "",
+    appSecret: "",
+    verificationToken: "",
+    encryptKey: "",
+    webhookPath: "/channels/feishu/events",
+    allowedChatIds: [],
+  },
+});
+
 export const RuntimeConfigSchema = z.object({
   home: z.string().optional(),
   workspace: z.object({ path: z.string().optional() }).default({ path: undefined }),
@@ -42,6 +105,7 @@ export const RuntimeConfigSchema = z.object({
     permissionMode: "bypassPermissions",
     maxTurns: 200,
   }),
+  channels: ChannelsSchema,
   tools: ToolsSchema.default({ permissions: { default: "allow", overrides: {} } }),
   scheduler: SchedulerSchema,
 });
@@ -51,4 +115,3 @@ export type RuntimeConfig = z.output<typeof RuntimeConfigSchema> & {
   home: string;
   workspace: { path: string };
 };
-

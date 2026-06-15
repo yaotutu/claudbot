@@ -7,6 +7,7 @@ import { makeWsHandlers, type WsData } from "./gateway/websocket.ts";
 import { formatConfigSource, loadConfig } from "./config/loader.ts";
 import { runtimePaths } from "./config/paths.ts";
 import { deliverScheduleResultToNotification } from "./scheduler/notify.ts";
+import { createChannelRegistry } from "./channels/registry.ts";
 
 const loaded = await loadConfig();
 const config = loaded.config;
@@ -17,6 +18,8 @@ const services = await buildServices({ loaded, paths });
 services.trigger.start(config.scheduler.tickIntervalMs);
 
 const handlers = makeWsHandlers(services);
+const channelRegistry = createChannelRegistry(services);
+await channelRegistry.start();
 
 // Wire schedule delivery to WebUI notifications. Scheduler results are product
 // notifications, not chat session messages.
@@ -48,7 +51,7 @@ const server = Bun.serve({
       const f = Bun.file(join(WEBUI_DIST, url.pathname));
       if (await f.exists()) return new Response(f);
     }
-    return handleHttp(req, url, services);
+    return handleHttp(req, url, services, channelRegistry);
   },
   websocket: {
     open: (ws) => handlers.open(ws as unknown as Parameters<typeof handlers.open>[0]),
@@ -69,11 +72,13 @@ if (loaded.source.kind === "defaults") {
 
 // Graceful shutdown — stop scheduler and close server.
 process.on("SIGINT", () => {
+  void channelRegistry.stop();
   services.trigger.stop();
   server.stop();
   process.exit(0);
 });
 process.on("SIGTERM", () => {
+  void channelRegistry.stop();
   services.trigger.stop();
   server.stop();
   process.exit(0);

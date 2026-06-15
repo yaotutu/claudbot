@@ -17,6 +17,7 @@ import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.t
 import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
 import { createNoopNotifier, type ScheduleNotifier } from "../scheduler/notify.ts";
 import { createNotificationStore, type NotificationStore } from "../notifications/store.ts";
+import { createChannelSessionBindingStore, type ChannelSessionBindingStore } from "../channels/session-bindings-store.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
@@ -32,6 +33,7 @@ export type ServiceContainer = {
   memory: MemoryStore;
   schedulerStore: SchedulerStore;
   notificationStore: NotificationStore;
+  channelBindings: ChannelSessionBindingStore;
   storeOps: SchedulerStoreOps;
   notifier: ScheduleNotifier;
   trigger: SchedulerTrigger;
@@ -69,6 +71,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   const memory = new MemoryStore(paths.memoryFile);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.runsFile);
   const notificationStore = createNotificationStore(paths.notificationsFile);
+  const channelBindings = createChannelSessionBindingStore(paths.channelBindingsFile);
   const sessions = createSessionService({ sessionsDir: paths.sessionsDir, runtimeState });
   await sessions.clearStaleActiveSession();
 
@@ -134,6 +137,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     memory,
     schedulerStore,
     notificationStore,
+    channelBindings,
     storeOps,
     notifier,
     trigger: triggerRef,
@@ -196,15 +200,14 @@ async function runScheduledTurn(
   let failedMessage = "";
   let execSessionId: string | undefined;
   for await (const ev of runner.run({ prompt })) {
+    if (ev.sessionId) execSessionId = ev.sessionId;
     if (ev.type === "text_delta") result += ev.text;
     if (ev.type === "turn_done") {
       result = ev.result || result;
-      if (ev.sessionId) execSessionId = ev.sessionId;
       if (ev.isError) failedMessage = ev.result || "scheduled turn failed";
     }
     if (ev.type === "error") {
       failedMessage = ev.message;
-      if (ev.sessionId) execSessionId = ev.sessionId;
     }
   }
   if (failedMessage) {
@@ -217,6 +220,7 @@ async function runScheduledTurn(
     }).catch((err) => {
       console.error("[scheduler] notifier.deliver failed:", err instanceof Error ? err.message : err);
     });
+    await cleanupExecutionSession(paths.sessionsDir, execSessionId);
     throw new Error(failedMessage);
   }
   const finalResult = result || `[定时任务 ${sched.name}] (no output)`;
@@ -234,15 +238,18 @@ async function runScheduledTurn(
 
   // Clean up the execution session — it's a background session that
   // should never appear in the user's sidebar.
-  if (execSessionId) {
-    const sessionDir = join(paths.sessionsDir, execSessionId);
-    try {
-      const { rm } = await import("node:fs/promises");
-      await rm(sessionDir, { recursive: true, force: true });
-    } catch {
-      // Non-critical — best effort cleanup
-    }
-  }
+  await cleanupExecutionSession(paths.sessionsDir, execSessionId);
 
   return finalResult;
+}
+
+async function cleanupExecutionSession(sessionsDir: string, execSessionId?: string): Promise<void> {
+  if (!execSessionId) return;
+  const sessionDir = join(sessionsDir, execSessionId);
+  try {
+    const { rm } = await import("node:fs/promises");
+    await rm(sessionDir, { recursive: true, force: true });
+  } catch {
+    // Non-critical — best effort cleanup
+  }
 }
