@@ -23,6 +23,9 @@ export function registerAgentFileTools(registry: ToolRegistry, deps: { profile: 
       content: [
         "Use agent_file_read and agent_file_update to inspect or edit user.md, soul.md, or memory.json.",
         "agent_file_update requires an expected version hash; read the target file first and pass the returned hash.",
+        "agent_file_update replaces the entire target file. Before calling it, start from the full content returned by agent_file_read and preserve all existing content that should remain.",
+        "Do not send a partial patch or excerpt to agent_file_update; its content field must be the complete new file content.",
+        "For user.md and soul.md, make the smallest necessary whole-file rewrite and keep the user's existing structure, wording, and manually written details unless the user asked to change them.",
         "Prefer memory tools for small durable facts. Use profile files for larger user-controlled profile or assistant behavior text.",
       ].join("\n"),
     },
@@ -35,7 +38,7 @@ export function registerAgentFileTools(registry: ToolRegistry, deps: { profile: 
 
   registry.register({
     name: "agent_file_update",
-    description: "Update an agent file. Requires the expected version hash for optimistic concurrency (returns version conflict on mismatch).",
+    description: "Replace the entire content of an agent file. Requires the expected version hash from agent_file_read; content must be the complete new file, not a patch or excerpt.",
     inputSchema: z.object({
       name: z.string().min(1),
       content: z.string(),

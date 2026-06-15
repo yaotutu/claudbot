@@ -11,6 +11,7 @@ import { ToolRegistry } from "../src/tools/registry.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { registerSchedulerTools } from "../src/tools/builtin/scheduler.ts";
+import { registerAgentFileTools } from "../src/tools/builtin/agent-files.ts";
 import { MemoryStore } from "../src/memory/store.ts";
 import { createSdkJsonlSessionStore } from "../src/sessions/sdk-jsonl-store.ts";
 import type { NormalizedEvent, SdkMessage } from "../src/agent/events.ts";
@@ -157,6 +158,33 @@ describe("prompt builder", () => {
     expect(prompt).not.toContain("schedule_delete");
     expect(prompt).not.toContain("schedule_set_enabled");
     expect(prompt).not.toContain("schedule_run_now");
+  });
+
+  test("agent file tool prompt warns that updates replace the entire file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-prompt-agent-files-"));
+    const profile = new AgentProfileStore({
+      userFile: join(dir, "user.md"),
+      soulFile: join(dir, "soul.md"),
+      memoryFile: join(dir, "memory.json"),
+    });
+    await profile.init();
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registerAgentFileTools(registry, { profile });
+
+    const prompt = await buildSystemPrompt({
+      home: dir,
+      workspacePath: join(dir, "ws"),
+      timezone: "Asia/Shanghai",
+      source: "user_turn",
+      userFile: join(dir, "missing-user.md"),
+      soulFile: join(dir, "missing-soul.md"),
+      now: new Date("2026-06-09T00:00:00.000Z"),
+      toolPrompts: registry.getPromptSections(),
+    });
+
+    expect(prompt).toContain("agent_file_update replaces the entire target file");
+    expect(prompt).toContain("preserve all existing content that should remain");
+    expect(prompt).toContain("Do not send a partial patch or excerpt");
   });
 });
 
