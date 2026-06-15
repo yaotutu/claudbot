@@ -11,6 +11,7 @@ import type { QueryFactory } from "../src/agent/runner.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import { readFileSync } from "node:fs";
 import { appendSessionJsonlEntry } from "../src/sessions/jsonl-store.ts";
+import { readFile } from "node:fs/promises";
 
 function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
   const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
@@ -224,6 +225,61 @@ describe("gateway HTTP", () => {
     expect(put2.status).toBe(409);
   });
 
+  test("GET /api/agent/files returns only profile files", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const res = await handleHttp(new Request("http://x/api/agent/files"), new URL("http://x/api/agent/files"), services);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["soul.md", "user.md"]);
+  });
+
+  test("memory endpoints expose status files dream and commits", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    await Bun.write(services.paths.longTermMemoryFile, "# Memory\n\nHTTP visible fact.\n");
+    await appendSessionJsonlEntry(services.paths.sessionsDir, "sess_memory_http", {
+      type: "user",
+      uuid: "mem-http-1",
+      timestamp: "2026-06-15T00:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "请记住：HTTP status should report applied candidates as drained." }] },
+    });
+
+    const status = await handleHttp(new Request("http://x/api/memory/status"), new URL("http://x/api/memory/status"), services);
+    expect(status.status).toBe(200);
+    const statusBody = await status.json() as { longTermFile: string; exists: boolean; pendingCandidates: number; gitAudit: { available: boolean } };
+    expect(statusBody.longTermFile.endsWith("MEMORY.md")).toBe(true);
+    expect(statusBody.exists).toBe(true);
+    expect(statusBody.pendingCandidates).toBe(1);
+
+    const files = await handleHttp(new Request("http://x/api/memory/files"), new URL("http://x/api/memory/files"), services);
+    expect(files.status).toBe(200);
+    const filesBody = await files.json() as Record<string, { content: string; version: string }>;
+    expect(filesBody["memory/MEMORY.md"].content).toContain("HTTP visible fact");
+
+    const dream = await handleHttp(
+      new Request("http://x/api/memory/dream", { method: "POST", body: JSON.stringify({ dryRun: true }) }),
+      new URL("http://x/api/memory/dream"),
+      services,
+    );
+    expect(dream.status).toBe(200);
+    expect(await dream.json()).toMatchObject({ dryRun: true, applied: 1 });
+
+    const applyDream = await handleHttp(
+      new Request("http://x/api/memory/dream", { method: "POST", body: JSON.stringify({ dryRun: false }) }),
+      new URL("http://x/api/memory/dream"),
+      services,
+    );
+    expect(applyDream.status).toBe(200);
+    expect(await applyDream.json()).toMatchObject({ dryRun: false, applied: 1 });
+
+    const drained = await handleHttp(new Request("http://x/api/memory/status"), new URL("http://x/api/memory/status"), services);
+    const drainedBody = await drained.json() as { pendingCandidates: number };
+    expect(drainedBody.pendingCandidates).toBe(0);
+
+    const commits = await handleHttp(new Request("http://x/api/memory/commits"), new URL("http://x/api/memory/commits"), services);
+    expect(commits.status).toBe(200);
+    expect(Array.isArray(await commits.json())).toBe(true);
+  });
+
   test("POST /api/schedules/:id/run-now starts a run without waiting for agent execution", async () => {
     let release!: () => void;
     const blocker = new Promise<void>((resolve) => { release = resolve; });
@@ -397,5 +453,76 @@ describe("runUserTurn", () => {
     expect(types).toContain("message.appended");
     const appended = sent.find((m) => (m as { type: string }).type === "message.appended") as { type: string; message: { role: string; content: string } } | undefined;
     expect(appended?.message.role).toBe("assistant");
+  });
+
+  test("runs memory dream after a successful explicit memory turn", async () => {
+    const factory = makeRecordingQueryFactory([]);
+    const { services } = await makeServices(factory);
+    const { maybeRunExplicitMemoryDreamAfterTurn } = await import("../src/gateway/websocket.ts");
+
+    await appendSessionJsonlEntry(services.paths.sessionsDir, "sess_auto_memory", {
+      type: "user",
+      uuid: "msg_auto_memory",
+      timestamp: "2026-06-15T00:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "记住：我叫 yaotutu" }] },
+    });
+
+    await maybeRunExplicitMemoryDreamAfterTurn(services, "记住：我叫 yaotutu", "sess_auto_memory", false);
+
+    expect(await readFile(services.paths.longTermMemoryFile, "utf8")).toContain("我叫 yaotutu");
+  });
+
+  test("explicit memory turn does not apply unrelated pending candidates", async () => {
+    const factory = makeRecordingQueryFactory([]);
+    const { services } = await makeServices(factory);
+    const { appendMemoryEvent } = await import("../src/memory/markdown-store.ts");
+    const { maybeRunExplicitMemoryDreamAfterTurn } = await import("../src/gateway/websocket.ts");
+
+    await appendMemoryEvent(services.memoryPaths, {
+      type: "candidate",
+      id: "implicit_pending_1",
+      sessionId: "sess_other",
+      content: "隐式候选不应该被显式触发自动应用。",
+      source: "periodic_dream",
+      createdAt: "2026-06-15T00:00:00.000Z",
+    });
+    await appendSessionJsonlEntry(services.paths.sessionsDir, "sess_auto_memory_scoped", {
+      type: "user",
+      uuid: "msg_auto_memory_scoped",
+      timestamp: "2026-06-15T00:00:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: "记住：我喜欢中文说明" }] },
+    });
+
+    await maybeRunExplicitMemoryDreamAfterTurn(services, "记住：我喜欢中文说明", "sess_auto_memory_scoped", false);
+
+    const memory = await readFile(services.paths.longTermMemoryFile, "utf8");
+    expect(memory).toContain("我喜欢中文说明");
+    expect(memory).not.toContain("隐式候选不应该被显式触发自动应用");
+  });
+
+  test("does not run memory dream for ordinary or failed turns", async () => {
+    const factory = makeRecordingQueryFactory([]);
+    const { services } = await makeServices(factory);
+    const { maybeRunExplicitMemoryDreamAfterTurn } = await import("../src/gateway/websocket.ts");
+
+    await appendSessionJsonlEntry(services.paths.sessionsDir, "sess_no_memory", {
+      type: "user",
+      uuid: "msg_no_memory",
+      timestamp: "2026-06-15T00:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "我叫 yaotutu" }] },
+    });
+    await appendSessionJsonlEntry(services.paths.sessionsDir, "sess_failed_memory", {
+      type: "user",
+      uuid: "msg_failed_memory",
+      timestamp: "2026-06-15T00:00:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: "记住：我喜欢短回答" }] },
+    });
+
+    await maybeRunExplicitMemoryDreamAfterTurn(services, "我叫 yaotutu", "sess_no_memory", false);
+    await maybeRunExplicitMemoryDreamAfterTurn(services, "记住：我喜欢短回答", "sess_failed_memory", true);
+
+    const memory = await readFile(services.paths.longTermMemoryFile, "utf8");
+    expect(memory).not.toContain("我叫 yaotutu");
+    expect(memory).not.toContain("我喜欢短回答");
   });
 });

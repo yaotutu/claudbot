@@ -9,9 +9,23 @@ import { registerAgentFileTools } from "../src/tools/builtin/agent-files.ts";
 import { SchedulerStore } from "../src/scheduler/store.ts";
 import { createStoreOps } from "../src/scheduler/store-ops.ts";
 import { createSchedulerTrigger } from "../src/scheduler/trigger.ts";
-import { MemoryStore } from "../src/memory/store.ts";
 import { AgentProfileStore } from "../src/agent/profile.ts";
+import { initMemoryMarkdownStore } from "../src/memory/markdown-store.ts";
+import { commitMemoryChanges, initMemoryGitStore } from "../src/memory/git-store.ts";
 import type { ToolContext } from "../src/tools/types.ts";
+
+function makeMemoryPaths(dir: string) {
+  return {
+    userFile: join(dir, "profile", "user.md"),
+    soulFile: join(dir, "profile", "soul.md"),
+    memoryDir: join(dir, "memory"),
+    longTermFile: join(dir, "memory", "MEMORY.md"),
+    eventsFile: join(dir, "memory", "memory_events.jsonl"),
+    stateFile: join(dir, "memory", "memory_state.json"),
+    deprecatedMemoryJsonFile: join(dir, "memory", "memory.json"),
+    sessionsDir: join(dir, "sessions"),
+  };
+}
 
 function makeCtx(services: unknown, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -114,19 +128,43 @@ describe("built-in cron tool", () => {
 });
 
 describe("built-in memory tools", () => {
-  test("memory_create and memory_search delegate", async () => {
+  test("markdown memory tools read search and append candidates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bim-"));
-    const memory = new MemoryStore(join(dir, "memory.json"));
+    const memoryPaths = makeMemoryPaths(dir);
+    await Bun.write(memoryPaths.userFile, "# User\n");
+    await Bun.write(memoryPaths.soulFile, "# Soul\n");
+    await initMemoryMarkdownStore(memoryPaths);
+    await Bun.write(memoryPaths.longTermFile, "# Memory\n\nProject uses Bun runtime.\n");
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    registerMemoryTools(registry, { memory });
-    const ctx = makeCtx({ memory });
-    const created = await registry.execute("memory_create", {
-      content: "User prefers Chinese.", tags: ["preference"], source: "test", confidence: 1,
-    }, ctx) as { id: string };
-    expect(created.id.startsWith("mem_")).toBe(true);
-    const found = await registry.execute("memory_search", { query: "Chinese" }, ctx) as { id: string }[];
-    expect(found).toHaveLength(1);
-    expect(found[0].id).toBe(created.id);
+    registerMemoryTools(registry, { memoryPaths });
+    const ctx = makeCtx({ memoryPaths }, { sessionId: "sess_1" });
+
+    const read = await registry.execute("memory_read", { path: "memory/MEMORY.md" }, ctx) as { content: string };
+    expect(read.content).toContain("Bun runtime");
+    const found = await registry.execute("memory_search", { query: "bun" }, ctx) as { path: string }[];
+    expect(found.some((hit) => hit.path === "memory/MEMORY.md")).toBe(true);
+    await registry.execute("memory_append_note", { content: "User prefers compact plans." }, ctx);
+    expect(await Bun.file(memoryPaths.eventsFile).text()).toContain("User prefers compact plans.");
+    const dream = await registry.execute("memory_dream", { dryRun: true }, ctx) as { dryRun: boolean; summary: string };
+    expect(dream.dryRun).toBe(true);
+    await expect(registry.execute("memory_create", { content: "x" }, ctx)).rejects.toThrow("unknown tool");
+  });
+
+  test("memory git audit tools expose log diff and revert", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-bim-git-"));
+    const memoryPaths = makeMemoryPaths(dir);
+    await initMemoryMarkdownStore(memoryPaths);
+    await initMemoryGitStore(memoryPaths);
+    await Bun.write(memoryPaths.longTermFile, "# Memory\n\nTool visible fact.\n");
+    const commit = await commitMemoryChanges(memoryPaths, "memory: add tool fact");
+
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    registerMemoryTools(registry, { memoryPaths });
+    const ctx = makeCtx({ memoryPaths });
+    const log = await registry.execute("memory_log", { limit: 5 }, ctx) as { sha: string }[];
+    expect(log[0].sha).toBe(commit.sha);
+    const diff = await registry.execute("memory_diff", { sha: commit.sha }, ctx) as { diff: string };
+    expect(diff.diff).toContain("Tool visible fact");
   });
 });
 
@@ -136,7 +174,6 @@ describe("built-in agent file tools", () => {
     const profile = new AgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
-      memoryFile: join(dir, "memory.json"),
     });
     await profile.init();
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
@@ -155,13 +192,13 @@ describe("built-in agent file tools", () => {
     const profile = new AgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
-      memoryFile: join(dir, "memory.json"),
     });
     await profile.init();
     const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerAgentFileTools(registry, { profile });
     const ctx = makeCtx({ profile });
     await expect(registry.execute("agent_file_read", { name: "secret.md" }, ctx)).rejects.toThrow();
+    await expect(registry.execute("agent_file_read", { name: "memory.json" }, ctx)).rejects.toThrow();
     await expect(registry.execute("agent_file_update", {
       name: "evil.md", content: "x", expectedVersion: "v",
     }, ctx)).rejects.toThrow();

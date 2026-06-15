@@ -9,7 +9,10 @@ export type RuntimePaths = {
   userFile: string;
   soulFile: string;
   memoryDir: string;
-  memoryFile: string;
+  longTermMemoryFile: string;
+  memoryEventsFile: string;
+  memoryStateFile: string;
+  deprecatedMemoryJsonFile: string;
   sessionsDir: string;
   schedulesDir: string;
   schedulesFile: string;
@@ -35,7 +38,10 @@ export function runtimePaths(config: RuntimeConfig): RuntimePaths {
     userFile: join(home, "profile", "user.md"),
     soulFile: join(home, "profile", "soul.md"),
     memoryDir: join(home, "memory"),
-    memoryFile: join(home, "memory", "memory.json"),
+    longTermMemoryFile: join(home, "memory", "MEMORY.md"),
+    memoryEventsFile: join(home, "memory", "memory_events.jsonl"),
+    memoryStateFile: join(home, "memory", "memory_state.json"),
+    deprecatedMemoryJsonFile: join(home, "memory", "memory.json"),
     sessionsDir: join(home, "sessions"),
     schedulesDir: join(home, "schedules"),
     schedulesFile: join(home, "schedules", "jobs.json"),

@@ -2,6 +2,10 @@
 
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { AgentFileName } from "../agent/profile.ts";
+import { readMemoryFile } from "../memory/markdown-store.ts";
+import { initMemoryGitStore, listMemoryCommits, revertMemoryCommit, showMemoryCommitDiff } from "../memory/git-store.ts";
+import { collectPendingMemoryCandidates, runMemoryDream } from "../memory/dream.ts";
+import type { MemoryReadableFile } from "../memory/types.ts";
 
 export type HttpResult = {
   status: number;
@@ -83,12 +87,11 @@ export async function handleHttp(
     }
 
     if (path === "/api/agent/files" && method === "GET") {
-      const [user, soul, memory] = await Promise.all([
+      const [user, soul] = await Promise.all([
         services.profile.readFile("user.md"),
         services.profile.readFile("soul.md"),
-        services.profile.readFile("memory.json"),
       ]);
-      return json(200, { "user.md": user, "soul.md": soul, "memory.json": memory });
+      return json(200, { "user.md": user, "soul.md": soul });
     }
     const agentFileMatch = path.match(/^\/api\/agent\/files\/([A-Za-z0-9._-]+)$/);
     if (agentFileMatch && method === "GET") {
@@ -112,6 +115,40 @@ export async function handleHttp(
         if (msg.includes("version conflict")) return json(409, { error: "version conflict" });
         return json(400, { error: msg });
       }
+    }
+
+    if (path === "/api/memory/status" && method === "GET") {
+      return json(200, await memoryStatus(services));
+    }
+    if (path === "/api/memory/files" && method === "GET") {
+      const [user, soul, memory] = await Promise.all([
+        readMemoryFile(services.memoryPaths, "user.md"),
+        readMemoryFile(services.memoryPaths, "soul.md"),
+        readMemoryFile(services.memoryPaths, "memory/MEMORY.md"),
+      ]);
+      return json(200, { "user.md": user, "soul.md": soul, "memory/MEMORY.md": memory });
+    }
+    const memoryFileMatch = path.match(/^\/api\/memory\/files\/(.+)$/);
+    if (memoryFileMatch && method === "GET") {
+      const name = decodeURIComponent(memoryFileMatch[1]);
+      if (!isMemoryFile(name)) return json(400, { error: "invalid memory file name" });
+      return json(200, await readMemoryFile(services.memoryPaths, name));
+    }
+    if (path === "/api/memory/dream" && method === "POST") {
+      const body = await safeJson(req) as { dryRun?: boolean } | null;
+      return json(200, await runMemoryDream(services.memoryPaths, { dryRun: Boolean(body?.dryRun) }));
+    }
+    if (path === "/api/memory/commits" && method === "GET") {
+      await initMemoryGitStore(services.memoryPaths);
+      return json(200, await listMemoryCommits(services.memoryPaths, 20));
+    }
+    const memoryDiffMatch = path.match(/^\/api\/memory\/commits\/([A-Za-z0-9]+)\/diff$/);
+    if (memoryDiffMatch && method === "GET") {
+      return json(200, { diff: await showMemoryCommitDiff(services.memoryPaths, memoryDiffMatch[1]) });
+    }
+    const memoryRevertMatch = path.match(/^\/api\/memory\/commits\/([A-Za-z0-9]+)\/revert$/);
+    if (memoryRevertMatch && method === "POST") {
+      return json(200, await revertMemoryCommit(services.memoryPaths, memoryRevertMatch[1]));
     }
 
     if (path === "/api/schedules" && method === "GET") {
@@ -220,7 +257,45 @@ function runtimeInfo(services: ServiceContainer) {
 }
 
 function isAgentFile(name: string): name is AgentFileName {
-  return name === "user.md" || name === "soul.md" || name === "memory.json";
+  return name === "user.md" || name === "soul.md";
+}
+
+function isMemoryFile(name: string): name is MemoryReadableFile {
+  return name === "user.md" || name === "soul.md" || name === "memory/MEMORY.md";
+}
+
+async function memoryStatus(services: ServiceContainer) {
+  const file = Bun.file(services.paths.longTermMemoryFile);
+  const exists = await file.exists();
+  const git = await initMemoryGitStore(services.memoryPaths);
+  const commits = git.available ? await listMemoryCommits(services.memoryPaths, 1) : [];
+  return {
+    home: services.paths.memoryDir,
+    longTermFile: services.paths.longTermMemoryFile,
+    exists,
+    sizeBytes: exists ? file.size : 0,
+    lastDreamAt: await lastMemoryEventAt(services.paths.memoryEventsFile, "dream_apply"),
+    pendingCandidates: (await collectPendingMemoryCandidates(services.memoryPaths)).length,
+    gitAudit: { ...git, latestCommit: commits[0] ?? null },
+  };
+}
+
+async function lastMemoryEventAt(path: string, type: string): Promise<string | null> {
+  const rows = await readEventRows(path);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (rows[i].type === type && typeof rows[i].createdAt === "string") return rows[i].createdAt as string;
+  }
+  return null;
+}
+
+async function readEventRows(path: string): Promise<Array<Record<string, unknown>>> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) return [];
+  const text = await file.text();
+  return text.split(/\r?\n/).flatMap((line) => {
+    if (!line.trim()) return [];
+    try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+  });
 }
 
 async function safeJson(req: Request): Promise<unknown> {

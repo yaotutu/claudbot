@@ -11,7 +11,8 @@ import { createSdkJsonlSessionStore } from "../sessions/sdk-jsonl-store.ts";
 import { createSessionService, type ClaudebotSessionService } from "../sessions/session-service.ts";
 import { RuntimeStateStore } from "./state.ts";
 import { AgentProfileStore } from "../agent/profile.ts";
-import { MemoryStore } from "../memory/store.ts";
+import { initMemoryMarkdownStore } from "../memory/markdown-store.ts";
+import type { MemoryMarkdownPaths } from "../memory/types.ts";
 import { SchedulerStore } from "../scheduler/store.ts";
 import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.ts";
 import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
@@ -29,7 +30,7 @@ export type ServiceContainer = {
   paths: RuntimePaths;
   runtimeState: RuntimeStateStore;
   profile: AgentProfileStore;
-  memory: MemoryStore;
+  memoryPaths: MemoryMarkdownPaths;
   schedulerStore: SchedulerStore;
   notificationStore: NotificationStore;
   storeOps: SchedulerStoreOps;
@@ -63,10 +64,19 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   const profile = new AgentProfileStore({
     userFile: paths.userFile,
     soulFile: paths.soulFile,
-    memoryFile: paths.memoryFile,
   });
   await profile.init();
-  const memory = new MemoryStore(paths.memoryFile);
+  const memoryPaths: MemoryMarkdownPaths = {
+    userFile: paths.userFile,
+    soulFile: paths.soulFile,
+    memoryDir: paths.memoryDir,
+    longTermFile: paths.longTermMemoryFile,
+    eventsFile: paths.memoryEventsFile,
+    stateFile: paths.memoryStateFile,
+    deprecatedMemoryJsonFile: paths.deprecatedMemoryJsonFile,
+    sessionsDir: paths.sessionsDir,
+  };
+  await initMemoryMarkdownStore(memoryPaths);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.scheduleRunsDir);
   const notificationStore = createNotificationStore(paths.notificationsFile);
   const sessions = createSessionService({ sessionsDir: paths.sessionsDir, runtimeState });
@@ -92,7 +102,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   const toolRegistry = buildToolRegistry(config, paths.toolAuditFile, {
     storeOps,
     getTrigger,
-    memory,
+    memoryPaths,
     profile,
   });
 
@@ -121,6 +131,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
           scheduleRunId,
           userFile: paths.userFile,
           soulFile: paths.soulFile,
+          longTermMemoryFile: paths.longTermMemoryFile,
         },
       },
       queryFactory,
@@ -131,7 +142,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     paths,
     runtimeState,
     profile,
-    memory,
+    memoryPaths,
     schedulerStore,
     notificationStore,
     storeOps,
@@ -148,7 +159,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
 function buildToolRegistry(
   config: RuntimeConfig,
   auditPath: string,
-  services: { storeOps: SchedulerStoreOps; getTrigger: () => SchedulerTrigger; memory: MemoryStore; profile: AgentProfileStore },
+  services: { storeOps: SchedulerStoreOps; getTrigger: () => SchedulerTrigger; memoryPaths: MemoryMarkdownPaths; profile: AgentProfileStore },
 ): ToolRegistry {
   const permissions = {
     defaultPolicy: config.tools.permissions.default,
@@ -188,6 +199,7 @@ async function runScheduledTurn(
         scheduleRunId: run.id,
         userFile: paths.userFile,
         soulFile: paths.soulFile,
+        longTermMemoryFile: paths.longTermMemoryFile,
       },
     },
     queryFactory,

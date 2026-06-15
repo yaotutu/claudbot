@@ -4,6 +4,8 @@ import type { ServerWebSocket } from "bun";
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { SessionSummaryWire, WsClientMessage, WsServerMessage } from "./protocol.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
+import { runMemoryDream } from "../memory/dream.ts";
+import { detectMemoryIntent } from "../memory/intent.ts";
 
 // SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
 // long so the SDK JSONL mirror has a chance to flush before we ack the WebUI.
@@ -166,6 +168,7 @@ export async function runUserTurn(
 
   const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
   const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
+  await maybeRunExplicitMemoryDreamAfterTurn(services, content, activeSdkId, turnErrored);
   send({ type: "run.completed", sessionId: activeSdkId, runId, isError: turnErrored, result: finalResult });
   send({
     type: "message.appended",
@@ -178,6 +181,22 @@ export async function runUserTurn(
       metadata: turnErrored ? { error: true } : {},
     },
   });
+}
+
+export async function maybeRunExplicitMemoryDreamAfterTurn(
+  services: ServiceContainer,
+  content: string,
+  sessionId: string | undefined,
+  turnErrored: boolean,
+): Promise<void> {
+  if (turnErrored || !sessionId || sessionId === "pending") return;
+  const intent = detectMemoryIntent(content);
+  if (intent.type !== "explicit") return;
+  try {
+    await runMemoryDream(services.memoryPaths, { dryRun: false, sessionId, includeEventCandidates: false });
+  } catch (err) {
+    console.error("[memory] explicit dream failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 function draftSessionSummary(sessionId: string, firstMessage: string): SessionSummaryWire {

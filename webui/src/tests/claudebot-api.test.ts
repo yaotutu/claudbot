@@ -5,12 +5,14 @@ import {
   deleteSchedule,
   fetchBootstrap,
   fetchRuntime,
+  fetchMemoryStatus,
   fetchNotifications,
   fetchScheduleRuns,
   fetchThreadMessages,
   listSchedules,
   listSessions,
   markNotificationsRead,
+  runMemoryDream,
   runScheduleNow,
   updateSchedule,
 } from "@/lib/claudebot-api";
@@ -120,6 +122,29 @@ describe("claudebot native API client", () => {
 
     expect(runtime.workspace).toBe("/w");
     expect(runtime.gateway.port).toBe(18790);
+  });
+
+  it("fetches memory status and runs dream", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === "/api/memory/status") {
+        return jsonResponse({
+          home: "/tmp/home/memory",
+          longTermFile: "/tmp/home/memory/MEMORY.md",
+          exists: true,
+          sizeBytes: 42,
+          lastDreamAt: null,
+          pendingCandidates: 1,
+          gitAudit: { available: true, latestCommit: null },
+        });
+      }
+      if (String(url) === "/api/memory/dream" && init?.method === "POST") {
+        return jsonResponse({ dryRun: true, applied: 0, summary: "No pending candidates" });
+      }
+      throw new Error(`unexpected ${String(url)}`);
+    }));
+
+    expect((await fetchMemoryStatus()).longTermFile).toContain("MEMORY.md");
+    expect((await runMemoryDream({ dryRun: true })).summary).toBe("No pending candidates");
   });
 
   it("fetchThreadMessages reads native thread messages", async () => {

@@ -1,5 +1,7 @@
 import type {
   CreateSchedulePayload,
+  MemoryDreamResult,
+  MemoryStatus,
   NotificationRecord,
   RuntimeInfo,
   ScheduleRecord,
@@ -47,6 +49,18 @@ export async function fetchBootstrap(base = ""): Promise<WebuiBootstrap> {
 
 export async function fetchRuntime(base = ""): Promise<RuntimeInfo> {
   return request<RuntimeInfo>(`${base}/api/runtime`);
+}
+
+export async function fetchMemoryStatus(base = ""): Promise<MemoryStatus> {
+  return request<MemoryStatus>(`${base}/api/memory/status`);
+}
+
+export async function runMemoryDream(input: { dryRun?: boolean } = {}, base = ""): Promise<MemoryDreamResult> {
+  return request<MemoryDreamResult>(`${base}/api/memory/dream`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export async function listSessions(base = ""): Promise<SessionSummary[]> {

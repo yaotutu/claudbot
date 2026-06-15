@@ -27,6 +27,16 @@ vi.mock("@/lib/claudebot-api", () => ({
   fetchThreadMessages: vi.fn(async () => [{ id: "m1", role: "user", content: "hello", createdAt: "2026-06-10T09:59:40.000Z", metadata: {} }]),
   listSchedules: vi.fn(async () => scheduleRows),
   fetchNotifications: vi.fn(async () => notificationRows),
+  fetchMemoryStatus: vi.fn(async () => ({
+    home: "/tmp/home/memory",
+    longTermFile: "/tmp/home/memory/MEMORY.md",
+    exists: true,
+    sizeBytes: 42,
+    lastDreamAt: null,
+    pendingCandidates: 1,
+    gitAudit: { available: true, latestCommit: null },
+  })),
+  runMemoryDream: vi.fn(async () => ({ dryRun: true, applied: 0, summary: "No pending candidates" })),
   markNotificationsRead: vi.fn(async () => 1),
   createSchedule: vi.fn(async () => ({ id: "sch_new", name: "new task", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "new", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: null, lastError: null, runCount: 0, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" })),
   updateSchedule: vi.fn(async () => undefined),
@@ -78,6 +88,10 @@ describe("App native layout", () => {
     expect(await screen.findByText("运行状态")).toBeInTheDocument();
     expect(screen.getByText("/tmp/workspace")).toBeInTheDocument();
     expect(screen.getAllByText("glm-5.1").length).toBeGreaterThan(0);
+    expect(await screen.findByText("Memory")).toBeInTheDocument();
+    expect(screen.getByText("MEMORY.md")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Run Dream" }));
+    expect(await screen.findByText(/Dream dry-run complete/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByText(/会话搜索暂未接入/)).toBeInTheDocument();
