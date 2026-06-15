@@ -44,6 +44,66 @@ describe("runtime config", () => {
     expect(paths.claudeDir).toBe("/tmp/bot/claude");
     expect(paths.sdkConfigDir).toBe("/tmp/bot/claude/config");
   });
+
+  test("accepts stdio, sse, and http MCP server config", () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/bot",
+        mcp: {
+          strict: true,
+          servers: {
+            filesystem: {
+              type: "stdio",
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+              env: { NODE_ENV: "test" },
+              timeout: 30000,
+              alwaysLoad: false,
+            },
+            search: {
+              type: "sse",
+              url: "http://127.0.0.1:3001/sse",
+              headers: { Authorization: "Bearer token" },
+              timeout: 10000,
+              alwaysLoad: true,
+            },
+            docs: {
+              type: "http",
+              url: "http://127.0.0.1:3002/mcp",
+              headers: {},
+              timeout: 10000,
+              alwaysLoad: false,
+            },
+          },
+        },
+      },
+      {},
+    );
+
+    expect(config.mcp.strict).toBe(true);
+    expect(config.mcp.servers.filesystem.type).toBe("stdio");
+    expect(config.mcp.servers.search.type).toBe("sse");
+    expect(config.mcp.servers.docs.type).toBe("http");
+  });
+
+  test("defaults MCP config to strict with no external servers", () => {
+    const config = resolveRuntimeConfig({ home: "/tmp/bot" }, {});
+    expect(config.mcp).toEqual({ strict: true, servers: {} });
+  });
+
+  test("rejects external MCP server named claudebot", () => {
+    expect(() => resolveRuntimeConfig(
+      {
+        home: "/tmp/bot",
+        mcp: {
+          servers: {
+            claudebot: { type: "stdio", command: "node", args: ["server.js"] },
+          },
+        },
+      },
+      {},
+    )).toThrow(/claudebot/i);
+  });
 });
 
 describe("loadConfig", () => {
