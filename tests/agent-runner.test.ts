@@ -311,6 +311,25 @@ describe("claude runner normalization", () => {
       expect(textEv.sessionId).toBeTruthy();
     }
   });
+
+  test("system init forwards MCP server status", async () => {
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([
+      {
+        type: "system",
+        subtype: "init",
+        session_id: "sess_init",
+        mcp_servers: [{ name: "filesystem", status: "connected" }],
+      },
+    ]));
+    const events = await collectEvents(runner.run({ prompt: "hi" }));
+    expect(events).toContainEqual({
+      type: "status",
+      status: "session_init",
+      sessionId: "sess_init",
+      mcpServers: [{ name: "filesystem", status: "connected" }],
+    });
+  });
 });
 
 describe("makeRealQueryFactory", () => {

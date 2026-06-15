@@ -59,7 +59,7 @@ export class ClaudeRunner {
       for await (const raw of stream) {
         const msg = raw as SdkMessage;
         if (msg.session_id) lastSessionId = msg.session_id;
-        for (const ev of normalize(msg, lastSessionId)) {
+        for (const ev of normalizeSdkMessage(msg, lastSessionId)) {
           yield ev;
         }
       }
@@ -108,7 +108,7 @@ export function makeRealQueryFactory(
 
 // --- Normalization --------------------------------------------------------
 
-function normalize(msg: SdkMessage, fallbackSessionId?: string): NormalizedEvent[] {
+export function normalizeSdkMessage(msg: SdkMessage, fallbackSessionId?: string): NormalizedEvent[] {
   const sid = msg.session_id || fallbackSessionId;
   switch (msg.type) {
     case "assistant": {
@@ -144,7 +144,7 @@ function normalize(msg: SdkMessage, fallbackSessionId?: string): NormalizedEvent
     }
     case "system": {
       if (msg.subtype === "thinking_tokens") return []; // noisy; ignore
-      if (msg.subtype === "init") return [{ type: "status", status: "session_init", sessionId: sid }];
+      if (msg.subtype === "init") return [{ type: "status", status: "session_init", sessionId: sid, mcpServers: msg.mcp_servers }];
       return [];
     }
     case "error": {
