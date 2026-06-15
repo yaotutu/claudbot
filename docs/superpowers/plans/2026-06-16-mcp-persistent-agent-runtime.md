@@ -773,14 +773,15 @@ describe("AgentRuntimeManager", () => {
     let created = 0;
     const queryFactory: AgentRuntimeQueryFactory = async ({ input }) => {
       created += 1;
-      void input;
       return {
         stream: (async function* () {
-          yield { type: "system", subtype: "init", session_id: "s1" };
-          yield { type: "assistant", message: { content: [{ type: "text", text: "ok" }] }, session_id: "s1" };
-          yield { type: "result", session_id: "s1", result: "ok", is_error: false };
-          yield { type: "assistant", message: { content: [{ type: "text", text: "again" }] }, session_id: "s1" };
-          yield { type: "result", session_id: "s1", result: "again", is_error: false };
+          let count = 0;
+          for await (const _message of input) {
+            count += 1;
+            yield { type: "system", subtype: "init", session_id: "s1" };
+            yield { type: "assistant", message: { content: [{ type: "text", text: count === 1 ? "ok" : "again" }] }, session_id: "s1" };
+            yield { type: "result", session_id: "s1", result: count === 1 ? "ok" : "again", is_error: false };
+          }
         })(),
         interrupt: async () => undefined,
         close: () => undefined,
@@ -813,10 +814,12 @@ describe("AgentRuntimeManager", () => {
     let created = 0;
     const queryFactory: AgentRuntimeQueryFactory = async ({ input }) => {
       created += 1;
-      void input;
+      const sessionId = `s${created}`;
       return {
         stream: (async function* () {
-          yield { type: "result", session_id: `s${created}`, result: "ok", is_error: false };
+          for await (const _message of input) {
+            yield { type: "result", session_id: sessionId, result: "ok", is_error: false };
+          }
         })(),
         interrupt: async () => undefined,
         close: () => undefined,
@@ -912,7 +915,7 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
   const runtimes = new Map<string, AgentRuntime>();
   const queryFactory = deps.queryFactory ?? createRealRuntimeQueryFactory();
 
-  async function getOrCreate(sessionId: string): Promise<AgentRuntime> {
+  async function getOrCreate(sessionId: string, resumeSessionId?: string): Promise<AgentRuntime> {
     const existing = runtimes.get(sessionId);
     if (existing && existing.status !== "closed") return existing;
     const inputQueue = createAsyncInputQueue<SDKUserMessage>();
@@ -928,7 +931,7 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
       ...buildBaseSdkOptions(deps.config, deps.sdkConfigDir, nativeServer),
       systemPrompt,
       sessionStore: deps.sessionStore,
-      resume: sessionId,
+      ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     };
     const query = await queryFactory({ input: inputQueue.iterable, options });
     const runtime: AgentRuntime = {
@@ -975,8 +978,8 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
     }
   }
 
-  async function runTurn(args: { sessionId: string; content: string; runId?: string }): Promise<{ runId: string; events: NormalizedEvent[] }> {
-    const runtime = await getOrCreate(args.sessionId);
+  async function runTurn(args: { sessionId: string; content: string; runId?: string; resumeSessionId?: string }): Promise<{ runId: string; events: NormalizedEvent[] }> {
+    const runtime = await getOrCreate(args.sessionId, args.resumeSessionId);
     if (runtime.status === "running") throw new Error(`session already running: ${args.sessionId}`);
     const runId = args.runId ?? crypto.randomUUID();
     runtime.status = "running";
@@ -1206,6 +1209,7 @@ In `src/gateway/websocket.ts`, keep frame aggregation semantics but replace the 
     sessionId: runtimeSessionId,
     content,
     runId,
+    resumeSessionId: sdkSessionId,
   });
 
   for (const ev of events) {
