@@ -433,4 +433,24 @@ describe("makeRealQueryFactory", () => {
     expect(opts.permissionMode).toBe("bypassPermissions");
     expect(opts.maxTurns).toBe(42);
   });
+
+  test("passes native and external MCP servers with strictMcpConfig", async () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/x",
+        mcp: {
+          strict: true,
+          servers: {
+            filesystem: { type: "stdio", command: "node", args: ["fs-server.js"] },
+          },
+        },
+      },
+      {},
+    );
+    const opts = await invokeFactoryAndCapture(config);
+    const servers = opts.mcpServers as Record<string, unknown>;
+    expect(servers.claudebot).toBeDefined();
+    expect(servers.filesystem).toEqual({ type: "stdio", command: "node", args: ["fs-server.js"] });
+    expect(opts.strictMcpConfig).toBe(true);
+  });
 });
