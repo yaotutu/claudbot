@@ -46,6 +46,17 @@ describe("runtime config", () => {
       webhookPath: "/channels/feishu/events",
       allowedChatIds: [],
     });
+    expect(config.channels.qq).toMatchObject({
+      enabled: false,
+      appId: "",
+      clientSecret: "",
+      sessionDir: "",
+      typingKeepAlive: true,
+      parseFaceEmoji: true,
+      allowedConversationIds: [],
+      allowedUserIds: [],
+      allowedGroupOpenids: [],
+    });
   });
 
   test("explicit channel config wins", () => {
@@ -69,12 +80,34 @@ describe("runtime config", () => {
           webhookPath: "/fs",
           allowedChatIds: ["chat-a"],
         },
+        qq: {
+          enabled: true,
+          appId: "qq-app",
+          clientSecret: "qq-secret",
+          sessionDir: "/tmp/qq-session",
+          typingKeepAlive: false,
+          parseFaceEmoji: false,
+          allowedConversationIds: ["c2c:user-a"],
+          allowedUserIds: ["user-a"],
+          allowedGroupOpenids: ["group-a"],
+        },
       },
     }, { homeEnv: "", configDir: "/tmp/cfg" });
 
     expect(config.channels.webui.enabled).toBe(false);
     expect(config.channels.telegram).toMatchObject({ enabled: true, mode: "polling", botToken: "tg-token", allowedChatIds: ["123"] });
     expect(config.channels.feishu).toMatchObject({ enabled: true, appId: "app-id", allowedChatIds: ["chat-a"] });
+    expect(config.channels.qq).toMatchObject({
+      enabled: true,
+      appId: "qq-app",
+      clientSecret: "qq-secret",
+      sessionDir: "/tmp/qq-session",
+      typingKeepAlive: false,
+      parseFaceEmoji: false,
+      allowedConversationIds: ["c2c:user-a"],
+      allowedUserIds: ["user-a"],
+      allowedGroupOpenids: ["group-a"],
+    });
   });
 
   test("derives user-facing runtime directories from home", () => {
@@ -91,6 +124,8 @@ describe("runtime config", () => {
     expect(paths.schedulesDir).toBe("/tmp/bot/schedules");
     expect(paths.schedulesFile).toBe("/tmp/bot/schedules/jobs.json");
     expect(paths.scheduleRunsDir).toBe("/tmp/bot/schedules/runs");
+    expect(paths.channelBindingsFile).toBe("/tmp/bot/channels/channel-bindings.json");
+    expect(paths.qqSessionDir).toBe("/tmp/bot/channels/qq");
     expect(paths.logsDir).toBe("/tmp/bot/logs");
     expect(paths.claudeDir).toBe("/tmp/bot/claude");
     expect(paths.sdkConfigDir).toBe("/tmp/bot/claude/config");

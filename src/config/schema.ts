@@ -69,10 +69,33 @@ const FeishuChannelSchema = z.object({
   allowedChatIds: [],
 });
 
+const QqChannelSchema = z.object({
+  enabled: z.boolean().default(false),
+  appId: z.string().default(""),
+  clientSecret: z.string().default(""),
+  sessionDir: z.string().default(""),
+  typingKeepAlive: z.boolean().default(true),
+  parseFaceEmoji: z.boolean().default(true),
+  allowedConversationIds: z.array(z.string()).default([]),
+  allowedUserIds: z.array(z.string()).default([]),
+  allowedGroupOpenids: z.array(z.string()).default([]),
+}).default({
+  enabled: false,
+  appId: "",
+  clientSecret: "",
+  sessionDir: "",
+  typingKeepAlive: true,
+  parseFaceEmoji: true,
+  allowedConversationIds: [],
+  allowedUserIds: [],
+  allowedGroupOpenids: [],
+});
+
 const ChannelsSchema = z.object({
   webui: WebuiChannelSchema,
   telegram: TelegramChannelSchema,
   feishu: FeishuChannelSchema,
+  qq: QqChannelSchema,
 }).default({
   webui: { enabled: true },
   telegram: {
@@ -91,6 +114,17 @@ const ChannelsSchema = z.object({
     encryptKey: "",
     webhookPath: "/channels/feishu/events",
     allowedChatIds: [],
+  },
+  qq: {
+    enabled: false,
+    appId: "",
+    clientSecret: "",
+    sessionDir: "",
+    typingKeepAlive: true,
+    parseFaceEmoji: true,
+    allowedConversationIds: [],
+    allowedUserIds: [],
+    allowedGroupOpenids: [],
   },
 });
 

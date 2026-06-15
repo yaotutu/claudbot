@@ -1,6 +1,7 @@
 import type { ServerFrame } from "../shared/webui-protocol.ts";
+import type { ChannelId } from "../channels/types.ts";
 
-export type ConversationSource = "webui" | "telegram" | "feishu" | "schedule";
+export type ConversationSource = "webui" | "schedule" | ChannelId;
 
 export type RunUserTurnInput = {
   source: ConversationSource;

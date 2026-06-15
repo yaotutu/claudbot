@@ -1,5 +1,5 @@
 import type { ServiceContainer } from "../../runtime/services.ts";
-import { runUserTurn } from "../../conversation/run-user-turn.ts";
+import { runChannelTurn } from "../runtime.ts";
 import type { ChannelRegistry } from "../registry.ts";
 import type { TelegramClient, TelegramConfig, TelegramUpdate } from "./types.ts";
 import { createTelegramClient } from "./client.ts";
@@ -27,42 +27,13 @@ export function createTelegramAdapter(
         return json(200, { ok: true, ignored: true });
       }
 
-      const existing = await services.channelBindings.find("telegram", inbound.chatId);
-      let assistantText = "";
-      let completedText = "";
-      let erroredText = "";
-
-      const result = await runUserTurn(
-        services,
-        { source: "telegram", sessionId: existing?.claudebotSessionId ?? null, content: inbound.text },
-        {
-          send: async (event) => {
-            if (event.type === "session.created") {
-              await services.channelBindings.upsert({
-                channel: "telegram",
-                externalConversationId: inbound.chatId,
-                externalUserId: inbound.userId,
-                claudebotSessionId: event.session.id,
-              });
-            }
-            if (event.type === "message.appended") assistantText = event.message.content;
-            if (event.type === "run.completed" && event.result) completedText = event.result;
-            if (event.type === "run.error") erroredText = event.message;
-          },
-        },
-      );
-
-      if (!existing && result.sessionId) {
-        await services.channelBindings.upsert({
-          channel: "telegram",
-          externalConversationId: inbound.chatId,
-          externalUserId: inbound.userId,
-          claudebotSessionId: result.sessionId,
-        });
-      }
-
-      const reply = assistantText || completedText || erroredText || "(no response)";
-      await client.sendMessage(inbound.chatId, reply);
+      const result = await runChannelTurn(services, {
+        channel: "telegram",
+        conversationId: inbound.chatId,
+        senderId: inbound.userId,
+        content: inbound.text,
+      });
+      await client.sendMessage(inbound.chatId, result.outbound.content);
       return json(200, { ok: true });
     },
   };

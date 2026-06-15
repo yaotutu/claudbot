@@ -39,7 +39,8 @@ Claudebot 的运行时目录应区分“实例配置/运行数据”和“Agent 
 │   ├── runtime_state.json
 │   └── notifications.json
 ├── channels/
-│   └── channel-bindings.json
+│   ├── channel-bindings.json
+│   └── qq/
 ├── media/
 ├── logs/
 ├── audit/
@@ -48,7 +49,7 @@ Claudebot 的运行时目录应区分“实例配置/运行数据”和“Agent 
     └── config/
 ```
 
-`src/config/paths.ts` 是这些路径的唯一来源。不要重新引入旧的 `agent/user.md`、`agent/soul.md`、`agent/memory.json`、`scheduler/schedules.json`、`scheduler/runs.json` 或 `sdk-config/` 路径；本项目不为旧目录做兼容、alias 或数据迁移。Profile 文本放在 `profile/`，长期记忆放在 `memory/`，SDK JSONL 会话放在 `sessions/`，外部 channel 绑定放在 `channels/channel-bindings.json`，定时任务定义放在 `schedules/jobs.json`，每次定时任务执行记录独立写入 `schedules/runs/<run-id>.json`。
+`src/config/paths.ts` 是这些路径的唯一来源。不要重新引入旧的 `agent/user.md`、`agent/soul.md`、`agent/memory.json`、`scheduler/schedules.json`、`scheduler/runs.json` 或 `sdk-config/` 路径；本项目不为旧目录做兼容、alias 或数据迁移。Profile 文本放在 `profile/`，长期记忆放在 `memory/`，SDK JSONL 会话放在 `sessions/`，外部 channel 绑定放在 `channels/channel-bindings.json`，QQ Gateway 会话状态放在 `channels/qq/`，定时任务定义放在 `schedules/jobs.json`，每次定时任务执行记录独立写入 `schedules/runs/<run-id>.json`。
 
 ## 构建、测试与开发命令
 
