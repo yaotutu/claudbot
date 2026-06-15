@@ -145,7 +145,29 @@ AgentRuntimeManager
 - contextRef: 当前工具上下文引用
 ```
 
-同一个 session 同一时间只允许一个 active turn。若用户在 running 状态再次发送消息，gateway 应返回明确错误或排队；第一版推荐返回错误，避免隐式排队导致 UI 状态难以解释。
+`AgentRuntimeManager` 必须按 `sessionId` 维护 runtime：
+
+```text
+Map<sessionId, AgentRuntime>
+```
+
+同一个 Claudebot agent 可以同时有多个活跃 WebUI session。不同 session 可以并行运行，各自拥有独立的 SDK `Query`、上下文、active run 和外部 MCP server 实例。这是目标能力，不是异常情况。
+
+```text
+agent instance
+  -> session A runtime -> SDK Query A -> MCP servers A
+  -> session B runtime -> SDK Query B -> MCP servers B
+```
+
+隔离原则：
+
+- 不同 session 可以并行执行。
+- 不同 session 的 stream event 必须只投递给对应 session。
+- 不同 session 的 `contextRef` 不能共享。
+- 不同 session 的 cancel 只影响自己的 active run。
+- 同一 session 同一时间只允许一个 active turn。
+
+若用户在同一 session 的 running 状态再次发送消息，gateway 应返回明确错误或排队；第一版推荐返回错误，避免隐式排队导致 UI 状态难以解释。
 
 ## 动态 ToolContext
 
@@ -282,9 +304,9 @@ WebUI 可见行为测试：
 ## 风险与处理
 
 - **Query 长期持有资源**：使用 idle TTL 和 server shutdown `closeAll()` 控制资源。
-- **多 session 资源占用**：第一版只在用户发送消息时创建 runtime，idle 后释放；后续可加最大活跃 runtime 数。
+- **多 session 资源占用**：多个活跃 session 拥有多个 SDK runtime 和多组 MCP servers 是合理设计；第一版只在用户发送消息时创建 runtime，idle 后释放；后续可加最大活跃 runtime 数和 LRU 释放策略。
 - **SDK streaming input 使用细节出错**：先用 mock 测 manager，再用最小 MCP fixture 做真实集成测试。
-- **上下文串 session**：用 `contextRef` 且每次 turn 开始前更新；并发 turn 第一版直接拒绝。
+- **上下文串 session**：每个 session 使用独立 `contextRef`；同一 session 每次 turn 开始前更新；同一 session 并发 turn 第一版直接拒绝。
 - **MCP 配置错误**：启动时做结构校验，运行时连接错误透传 SDK status/error。
 
 ## 迁移策略
