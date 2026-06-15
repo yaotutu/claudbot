@@ -239,15 +239,23 @@ AgentRuntimeManager.cancel(sessionId)
 
 ## Scheduler 边界
 
-scheduler 不复用用户聊天 runtime。
+scheduler 不复用用户聊天 runtime，但复用同一套 SDK options / MCP 组装逻辑。
 
-原因：
+到点后 scheduler 创建一个独立后台执行 session。这个 session 和普通用户 session 一样使用当前 agent 配置：
+
+- 总是注入 `claudebot` 内置 MCP server。
+- 如果 `config.mcp.servers` 有外部 MCP，则一起注入。
+- 如果没有外部 MCP，则不额外注入。
+
+区别只在生命周期：scheduler 执行完立即关闭，并通过 notification 投递结果；普通用户 session 则保持 long-lived Query，直到 idle TTL 或显式关闭。
+
+隔离原因：
 
 - scheduler 是后台一次性任务，不应污染用户当前热态聊天。
 - scheduler 可能在用户不在线时触发，常驻会浪费资源。
 - scheduler 结果通过 notification 投递，和 WebUI session 交互边界不同。
 
-scheduler 继续使用 single-turn runner，并同样注入 `mcpServers`。如果某些定时任务依赖慢 MCP，后续再单独设计 scheduler runtime pool。
+scheduler 继续使用 single-turn runner。MCP 对 scheduler 没有特殊规则；它只是另一个临时 SDK session。
 
 ## 保留与重构范围
 
