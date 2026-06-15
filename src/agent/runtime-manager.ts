@@ -38,6 +38,7 @@ type AgentRuntime = {
   contextRef: ToolContextRef;
   status: RuntimeStatus;
   activeRunId?: string;
+  activeSink?: (event: NormalizedEvent) => void;
   events: NormalizedEvent[];
   waiters: Array<(event: NormalizedEvent) => void>;
   lastUsedAt: number;
@@ -122,6 +123,7 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
 
   function publish(runtime: AgentRuntime, event: NormalizedEvent): void {
     runtime.events.push(event);
+    runtime.activeSink?.(event);
     const waiters = runtime.waiters.splice(0);
     for (const waiter of waiters) waiter(event);
   }
@@ -131,6 +133,7 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
     content: string;
     runId?: string;
     resumeSessionId?: string;
+    onEvent?: (event: NormalizedEvent) => void;
   }): Promise<{ runId: string; events: NormalizedEvent[] }> {
     const runtime = await getOrCreate(args.sessionId, args.resumeSessionId);
     if (runtime.status === "running" || runtime.status === "cancelling") throw new Error(`session already running: ${args.sessionId}`);
@@ -138,6 +141,7 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
     const runId = args.runId ?? crypto.randomUUID();
     runtime.status = "running";
     runtime.activeRunId = runId;
+    runtime.activeSink = args.onEvent;
     runtime.contextRef.current = makeContext(args.sessionId);
     const startIndex = runtime.events.length;
     runtime.inputQueue.push({
@@ -152,8 +156,9 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
       await new Promise<void>((resolve) => runtime.waiters.push(() => resolve()));
     }
 
-    if (runtime.status !== "closed" && runtime.status !== "failed") runtime.status = "idle";
+    if (runtime.status === "running" || runtime.status === "cancelling") runtime.status = "idle";
     runtime.activeRunId = undefined;
+    runtime.activeSink = undefined;
     runtime.lastUsedAt = Date.now();
     return { runId, events: runtime.events.slice(startIndex) };
   }

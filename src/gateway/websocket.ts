@@ -75,10 +75,14 @@ async function handleClientMessage(
       return;
     }
     case "chat.cancel": {
-      // MVP: cancellation handled at the runner level; not implemented in MVP.
+      await cancelUserTurn(services, msg.sessionId);
       return;
     }
   }
+}
+
+export async function cancelUserTurn(services: ServiceContainer, sessionId: string): Promise<void> {
+  await services.agentRuntimeManager.cancel(sessionId);
 }
 
 export async function runUserTurn(
@@ -95,44 +99,54 @@ export async function runUserTurn(
 
   const sdkSessionId = await services.sessions.resolveResumeSessionId(sessionId);
 
-  // We need a session id before we can persist anything. If we don't have one
-  // yet, run the query and capture the new id from system/init or the result.
-  const runner = services.makeRunner("user_turn", sdkSessionId ?? "pending");
+  // We need a session id before we can persist anything. If this is a draft,
+  // key the hot runtime by draft id until the SDK returns the real session id,
+  // then remap the runtime so following turns reuse the same Query.
+  const runtimeSessionId = sdkSessionId ?? sessionId ?? options.draftId ?? `pending-${runId}`;
   let lastSessionId: string | undefined = sdkSessionId;
   let collected = "";
   let turnErrored = false;
   let finalResult = "";
   let sessionCreated = false;
 
-  try {
-    for await (const ev of runner.run({ prompt: content, resumeSessionId: sdkSessionId })) {
-      // Surface mirror_error so WebUI status reflects SDK health
-      if (ev.type === "error" && ev.message.includes("mirror_error")) {
-        send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
-        continue;
-      }
-      if (ev.sessionId && ev.sessionId !== lastSessionId) {
-        lastSessionId = ev.sessionId;
-      }
-      if (!sdkSessionId && !sessionCreated && lastSessionId && lastSessionId !== "pending") {
-        sessionCreated = true;
-        send({
-          type: "session.created",
-          draftId: options.draftId,
-          session: draftSessionSummary(lastSessionId, content),
-        });
-      }
-      forwardNative(send, ev, runId, lastSessionId ?? initialRouteId);
-      if (ev.type === "text_delta") collected += ev.text;
-      if (ev.type === "turn_done") {
-        finalResult = ev.result;
-        if (ev.sessionId) lastSessionId = ev.sessionId;
-      }
-      if (ev.type === "error") {
-        turnErrored = true;
-        finalResult = `[error] ${ev.message}`;
-      }
+  const handleEvent = (ev: NormalizedEvent) => {
+    // Surface mirror_error so WebUI status reflects SDK health
+    if (ev.type === "error" && ev.message.includes("mirror_error")) {
+      send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
+      return;
     }
+    if (ev.sessionId && ev.sessionId !== lastSessionId) {
+      lastSessionId = ev.sessionId;
+    }
+    if (!sdkSessionId && !sessionCreated && lastSessionId && lastSessionId !== "pending") {
+      sessionCreated = true;
+      send({
+        type: "session.created",
+        draftId: options.draftId,
+        session: draftSessionSummary(lastSessionId, content),
+      });
+      if (runtimeSessionId !== lastSessionId) services.agentRuntimeManager.remapSession(runtimeSessionId, lastSessionId);
+    }
+    forwardNative(send, ev, runId, lastSessionId ?? initialRouteId);
+    if (ev.type === "text_delta") collected += ev.text;
+    if (ev.type === "turn_done") {
+      finalResult = ev.result;
+      if (ev.sessionId) lastSessionId = ev.sessionId;
+    }
+    if (ev.type === "error") {
+      turnErrored = true;
+      finalResult = `[error] ${ev.message}`;
+    }
+  };
+
+  try {
+    await services.agentRuntimeManager.runTurn({
+      sessionId: runtimeSessionId,
+      content,
+      runId,
+      resumeSessionId: sdkSessionId,
+      onEvent: handleEvent,
+    });
   } catch (err) {
     turnErrored = true;
     finalResult = `[error] ${err instanceof Error ? err.message : String(err)}`;
@@ -216,6 +230,8 @@ function forwardNative(send: (m: WsServerMessage) => void, ev: NormalizedEvent, 
       send({ type: "run.error", sessionId, runId, message: ev.message });
       break;
     case "status":
+      send({ type: "run.status", sessionId, runId, status: ev.status, mcpServers: ev.mcpServers });
+      break;
     case "turn_done":
       break;
   }

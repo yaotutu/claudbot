@@ -1,6 +1,7 @@
+import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import type { RuntimeConfig } from "../config/schema.ts";
 
-export type SdkMcpServerMap = Record<string, unknown>;
+export type SdkMcpServerMap = Record<string, McpServerConfig>;
 
 export function buildSdkEnv(config: RuntimeConfig, sdkConfigDir: string): Record<string, string | undefined> {
   return {
@@ -16,14 +17,14 @@ export function buildSdkEnv(config: RuntimeConfig, sdkConfigDir: string): Record
   };
 }
 
-export function buildSdkMcpServers(config: RuntimeConfig, nativeServer: unknown): SdkMcpServerMap {
+export function buildSdkMcpServers(config: RuntimeConfig, nativeServer: McpServerConfig): SdkMcpServerMap {
   return {
     claudebot: nativeServer,
-    ...config.mcp.servers,
+    ...(config.mcp.servers as SdkMcpServerMap),
   };
 }
 
-export function buildBaseSdkOptions(config: RuntimeConfig, sdkConfigDir: string, nativeServer: unknown) {
+export function buildBaseSdkOptions(config: RuntimeConfig, sdkConfigDir: string, nativeServer: McpServerConfig) {
   return {
     model: config.claudeCode.model,
     permissionMode: config.claudeCode.permissionMode,

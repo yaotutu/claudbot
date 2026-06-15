@@ -155,8 +155,9 @@ describe("tool registry", () => {
     const contextRef = { current: makeCtx({ sessionId: "s1" }) };
     const server = createClaudebotSdkMcpServer(registry, contextRef) as unknown as {
       instance?: { _registeredTools?: Record<string, { handler: (args: unknown) => Promise<unknown> }> };
+      config?: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> };
     };
-    const tool = server.instance?._registeredTools?.ctx_echo;
+    const tool = server.instance?._registeredTools?.ctx_echo ?? server.config?.tools?.find((item) => item.name === "ctx_echo");
     if (!tool) throw new Error("ctx_echo tool not found");
 
     await tool.handler({});

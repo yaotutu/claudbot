@@ -149,4 +149,25 @@ describe("AgentRuntimeManager", () => {
     await manager.runTurn({ sessionId: "sdk-session-1", content: "two", resumeSessionId: "sdk-session-1" });
     expect(manager.activeCount).toBe(1);
   });
+
+  test("streams turn events through onEvent while returning the full turn", async () => {
+    const queryFactory: AgentRuntimeQueryFactory = async ({ input }) => ({
+      stream: respondToInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+    });
+    const manager = makeManager(queryFactory);
+    const streamed: string[] = [];
+
+    const result = await manager.runTurn({
+      sessionId: "s1",
+      content: "one",
+      resumeSessionId: "s1",
+      onEvent: (event) => streamed.push(event.type),
+    });
+
+    expect(streamed).toContain("text_delta");
+    expect(streamed).toContain("turn_done");
+    expect(result.events.map((event) => String(event.type))).toEqual(streamed);
+  });
 });
