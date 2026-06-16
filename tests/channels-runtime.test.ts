@@ -54,20 +54,22 @@ describe("channel runtime", () => {
 
     const result = await runChannelTurn(services, {
       channel: "telegram",
-      conversationId: "chat-1",
+      chatId: "chat-1",
       senderId: "user-1",
       content: "ping channel runtime",
+      media: [],
+      metadata: {},
     });
 
     expect(factory.calls).toEqual([{ prompt: "ping channel runtime", resumeSessionId: undefined }]);
     expect(result.outbound.channel).toBe("telegram");
-    expect(result.outbound.conversationId).toBe("chat-1");
+    expect(result.outbound.chatId).toBe("chat-1");
     expect(result.outbound.isError).toBe(false);
     expect(result.isError).toBe(false);
     expect(typeof result.outbound.content).toBe("string");
     expect(result.outbound.content.length).toBeGreaterThan(0);
-    const binding = await services.channelBindings.find("telegram", "chat-1");
-    expect(binding).toMatchObject({ channel: "telegram", externalConversationId: "chat-1", externalUserId: "user-1" });
+    const binding = await services.channelBindings.find("telegram", "telegram:chat-1");
+    expect(binding).toMatchObject({ channel: "telegram", externalChatId: "telegram:chat-1", externalUserId: "user-1" });
   });
 
   test("resumes through an existing channel binding", async () => {
@@ -79,9 +81,11 @@ describe("channel runtime", () => {
 
     const first = await runChannelTurn(services, {
       channel: "telegram",
-      conversationId: "chat-2",
+      chatId: "chat-2",
       senderId: "user-2",
       content: "first turn",
+      media: [],
+      metadata: {},
     });
     if (!first.sessionId) throw new Error("first turn did not create a session");
     await appendSessionJsonlEntry(services.paths.sessionsDir, first.sessionId, {
@@ -92,9 +96,11 @@ describe("channel runtime", () => {
 
     const result = await runChannelTurn(services, {
       channel: "telegram",
-      conversationId: "chat-2",
+      chatId: "chat-2",
       senderId: "user-2",
       content: "resume me",
+      media: [],
+      metadata: {},
     });
 
     expect(factory.calls).toEqual([
@@ -102,6 +108,49 @@ describe("channel runtime", () => {
       { prompt: "resume me", resumeSessionId: first.sessionId },
     ]);
     expect(result.sessionId).toBe(first.sessionId);
-    expect(result.outbound.conversationId).toBe("chat-2");
+    expect(result.outbound.chatId).toBe("chat-2");
+  });
+
+  test("uses sessionKey as the binding key while replying to the visible chat", async () => {
+    const factory = makeQueuedQueryFactory([
+      [fixture("01-init"), fixture("05-text-assistant"), fixture("07-result-success")],
+      [fixture("05-text-assistant"), fixture("07-result-success")],
+    ]);
+    const { services } = await makeServices(factory);
+
+    const first = await runChannelTurn(services, {
+      channel: "telegram",
+      chatId: "topic-visible",
+      senderId: "user-3",
+      content: "first topic turn",
+      media: [],
+      metadata: {},
+      sessionKey: "telegram:thread:42",
+    });
+    if (!first.sessionId) throw new Error("first turn did not create a session");
+    await appendSessionJsonlEntry(services.paths.sessionsDir, first.sessionId, {
+      type: "user",
+      uuid: "seed-topic-user",
+      message: { role: "user", content: "first topic turn" },
+    });
+
+    const result = await runChannelTurn(services, {
+      channel: "telegram",
+      chatId: "topic-visible",
+      senderId: "user-3",
+      content: "resume topic",
+      media: [],
+      metadata: {},
+      sessionKey: "telegram:thread:42",
+    });
+
+    expect(factory.calls).toEqual([
+      { prompt: "first topic turn", resumeSessionId: undefined },
+      { prompt: "resume topic", resumeSessionId: first.sessionId },
+    ]);
+    expect(result.sessionId).toBe(first.sessionId);
+    expect(result.outbound.chatId).toBe("topic-visible");
+    const binding = await services.channelBindings.find("telegram", "telegram:thread:42");
+    expect(binding).toMatchObject({ externalChatId: "telegram:thread:42", externalUserId: "user-3" });
   });
 });
