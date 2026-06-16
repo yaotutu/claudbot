@@ -4,6 +4,12 @@
 
 `src/` 是 Bun/TypeScript 运行时：`gateway/` 处理 HTTP 和 WebSocket 流量，`runtime/` 负责服务装配，`agent/` 封装 Claude SDK，`sessions/` 保存会话转录，`scheduler/` 运行定时任务，`tools/` 注册内置工具。根目录测试位于 `tests/*.test.ts`，测试夹具在 `tests/fixtures/`。React WebUI 独立放在 `webui/`；源码在 `webui/src/`，测试在 `webui/src/tests/`，生产构建输出到 `webui/dist/`。设计说明和计划位于 `docs/superpowers/`。
 
+每个具备独立职责的模块目录都应维护一个本目录 `README.md`，说明模块边界、关键入口、数据流、测试方式和常见修改注意事项。新增或大幅重构模块时，必须同步新增/更新对应 README，并在本文件的“模块 README 索引”中添加引用，方便后续 agent 进入模块前先读本地说明。
+
+## 模块 README 索引
+
+- `src/channels/README.md`: 外部聊天渠道协议、adapter 生命周期、运行时分发和平台实现边界。
+
 ## 当前架构边界
 
 本项目曾参考 openclaw/nanobot，但当前方向是 Claudebot 原生实现。WebUI 只保留 nanobot 风格的页面视觉、布局密度和基础交互体验；数据接口、WebSocket 协议、session/draft/remap 逻辑都应使用 Claudebot 自己的契约。不要为了兼容旧 nanobot adapter、旧 `ClientProvider`、旧 `useSessions`、旧 `useClaudebotStream` 协议而新增代码。历史消息格式和历史前端测试不要求兼容。
