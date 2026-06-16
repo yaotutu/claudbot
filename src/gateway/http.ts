@@ -34,6 +34,7 @@ export async function handleHttp(
           gateway: services.config.gateway,
           claudeCode: {
             model: services.config.claudeCode.model,
+            providerModel: services.config.claudeCode.providerModel,
             permissionMode: services.config.claudeCode.permissionMode,
           },
           workspace: { path: services.paths.workspace },
@@ -220,6 +221,7 @@ function runtimeInfo(services: ServiceContainer) {
     workspace: services.paths.workspace,
     gateway: services.config.gateway,
     model: services.config.claudeCode.model,
+    providerModel: services.config.claudeCode.providerModel,
     permissionMode: services.config.claudeCode.permissionMode,
   };
 }

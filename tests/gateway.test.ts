@@ -150,7 +150,8 @@ describe("gateway HTTP", () => {
       home: dir,
       workspace: join(dir, "workspace"),
       gateway: { host: "0.0.0.0", port: 18790 },
-      model: "glm-5.1",
+      model: "sonnet",
+      providerModel: "",
       permissionMode: "bypassPermissions",
     });
   });

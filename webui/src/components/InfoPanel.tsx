@@ -1,6 +1,7 @@
 import type { RuntimeInfo } from "@/lib/claudebot-types";
 
 export function InfoPanel({ panel, runtime, onClose }: { panel: "settings" | "search" | "skills"; runtime: RuntimeInfo; onClose: () => void }) {
+  const modelLabel = formatModelLabel(runtime);
   return (
     <div className="absolute right-5 top-16 z-20 w-[360px] rounded-lg border border-border bg-popover p-4 text-sm shadow-xl">
       <div className="mb-3 flex items-center justify-between">
@@ -9,7 +10,7 @@ export function InfoPanel({ panel, runtime, onClose }: { panel: "settings" | "se
       </div>
       {panel === "settings" ? (
         <dl className="grid gap-2 text-xs">
-          <InfoRow label="Model" value={runtime.model} />
+          <InfoRow label="Model" value={modelLabel} />
           <InfoRow label="Workspace" value={runtime.workspace} />
           <InfoRow label="Home" value={runtime.home} />
           <InfoRow label="Gateway" value={`${runtime.gateway.host}:${runtime.gateway.port}`} />
@@ -22,6 +23,10 @@ export function InfoPanel({ panel, runtime, onClose }: { panel: "settings" | "se
       )}
     </div>
   );
+}
+
+function formatModelLabel(runtime: RuntimeInfo): string {
+  return runtime.providerModel.length > 0 ? `${runtime.model} -> ${runtime.providerModel}` : runtime.model;
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {

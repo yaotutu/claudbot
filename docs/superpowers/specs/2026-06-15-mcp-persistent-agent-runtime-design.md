@@ -32,7 +32,6 @@ TypeScript SDK 文档和当前安装的 `@anthropic-ai/claude-agent-sdk@0.3.169`
 
 - https://code.claude.com/docs/en/agent-sdk/typescript
 - https://code.claude.com/docs/en/agent-sdk/typescript-v2-preview
-- https://code.claude.com/docs/en/agent-sdk/python
 
 ## 核心结论
 

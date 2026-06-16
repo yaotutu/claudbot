@@ -8,6 +8,7 @@ export type RuntimeInfo = {
   workspace: string;
   gateway: { host: string; port: number };
   model: string;
+  providerModel: string;
   permissionMode: string;
 };
 

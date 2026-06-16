@@ -1,116 +1,135 @@
-# claudebot webui
+# claudebot WebUI
 
-The browser front-end for the claudebot gateway. It is built with Vite + React 18 +
-TypeScript + Tailwind 3 + shadcn/ui, talks to the gateway over the WebSocket
-multiplex protocol, and reads session metadata from the embedded REST surface
-on the same port.
+这是 claudebot 的浏览器前端，使用 Vite、React 18、TypeScript 和 Tailwind 3 构建。它通过当前 claudebot 原生 REST/WebSocket 契约连接 gateway，不依赖旧 adapter 或其他运行时。
 
-For the project overview, install guide, and general docs map, see the root
-[`README.md`](../README.md).
-
-## Just want to use the WebUI?
-
-If you installed claudebot via `pip install claudebot`, the WebUI is **already bundled** in the wheel. Enable the WebSocket channel in `~/.claudebot/config.json` and run `claudebot gateway` — see the root [`README.md`](../README.md#-webui) for the 3-step setup. You do **not** need anything in this directory.
-
-This `webui/` tree is for people **hacking on the WebUI itself** (UI changes, new components, styling, etc.).
-
-## Layout
+## 目录
 
 ```text
-webui/                 source tree (this directory)
-claudebot/web/dist/      build output served by the gateway
+webui/            WebUI 源码
+webui/src/        React/TypeScript 源码
+webui/dist/       生产构建输出，运行时由 src/server.ts 直接服务
 ```
 
-## Develop the WebUI (Vite HMR)
+## 首次安装
 
-### 1. Install claudebot from source
-
-From the repository root:
+从仓库根目录安装运行时依赖：
 
 ```bash
-pip install -e .
+bun install
 ```
 
-> Editable installs intentionally **skip** the WebUI bundle step — Vite HMR is faster than rebuilding `dist/` on every change.
-
-### 2. Enable the WebSocket channel
-
-In `~/.claudebot/config.json`:
-
-```json
-{ "channels": { "websocket": { "enabled": true } } }
-```
-
-### 3. Start the gateway
-
-In one terminal:
-
-```bash
-claudebot gateway
-```
-
-### 4. Start the WebUI dev server
-
-In another terminal:
+WebUI 是独立 package，需要进入 `webui/` 安装一次前端依赖：
 
 ```bash
 cd webui
-bun install            # npm install also works
+bun install
+cd ..
+```
+
+## 开发模式
+
+最常用方式是在仓库根目录同时启动 gateway 和 WebUI：
+
+```bash
 bun run dev
 ```
 
-Then open `http://127.0.0.1:5173`.
+然后打开：
 
-By default the dev server proxies `/api`, `/webui`, `/auth`, and WebSocket traffic to `http://127.0.0.1:18790`.
+```text
+http://127.0.0.1:5173
+```
 
-If your gateway listens on a non-default port, point the dev server at it:
+`bun run dev` 会启动两个进程：
+
+- gateway: `http://127.0.0.1:18790`
+- Vite WebUI: `http://127.0.0.1:5173`
+
+如果只调试 WebUI，也可以分开启动：
 
 ```bash
+# 终端 1：仓库根目录
+bun run dev:server
+
+# 终端 2：仓库根目录
+bun run dev:webui
+```
+
+如果 gateway 不在默认端口，给 Vite 指定代理目标：
+
+```bash
+cd webui
 CLAUDEBOT_API_URL=http://127.0.0.1:9000 bun run dev
 ```
 
-### Access from another device (LAN)
+## 生产构建与启动
 
-To use the WebUI from another device on the same network, set `host` to `"0.0.0.0"` and configure a `token` or `tokenIssueSecret` in `~/.claudebot/config.json`:
+先构建 WebUI：
+
+```bash
+cd webui
+bun run build
+cd ..
+```
+
+再从仓库根目录启动运行时：
+
+```bash
+bun run start
+```
+
+构建产物写入 `webui/dist/`。`src/server.ts` 会在 gateway 同一端口服务 `index.html`、`assets/`、`brand/` 和 API/WS。
+
+默认访问地址：
+
+```text
+http://127.0.0.1:18790
+```
+
+## 配置
+
+运行时配置由根目录的 `src/config/schema.ts` 定义，加载顺序如下：
+
+1. `CLAUDEBOT_CONFIG` 指向的 JSON 文件
+2. `$CLAUDEBOT_HOME/config.json`
+3. 如果目标配置不存在，运行时会自动创建一份 starter config，并在启动日志里提示你编辑它
+4. 如果创建失败，或已有配置文件 JSON 无法解析，才退回 schema 默认值
+
+默认 home 是 `~/.claudebot`，常用配置路径是：
+
+```text
+~/.claudebot/config.json
+```
+
+根目录提供了 `config.example.json`。可以按需复制内容到自己的实例配置文件中，再替换模型、API 地址、密钥和端口。
+
+Claude Code 模型配置分两层：
 
 ```json
 {
-  "channels": {
-    "websocket": {
-      "enabled": true,
-      "host": "0.0.0.0",
-      "port": 18790,
-      "tokenIssueSecret": "your-secret-here"
-    }
+  "claudeCode": {
+    "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+    "apiKey": "your-key",
+    "model": "sonnet",
+    "providerModel": "glm-4.7"
   }
 }
 ```
 
-The gateway will refuse to start if `host` is `"0.0.0.0"` and neither `token` nor `tokenIssueSecret` is set.
+`claudeCode.model` 必须是 Claude Code 认识的 `haiku`、`sonnet` 或 `opus`。实际供应商模型写在 `providerModel`；运行时会自动注入对应的 `ANTHROPIC_DEFAULT_*_MODEL` 环境变量，例如 `sonnet -> glm-4.7`。不要把 `glm-*` 直接写进 `claudeCode.model`。
 
-Then open `http://<your-ip>:18790` on the other device. The WebUI will show an authentication form where you enter the secret. It is saved in your browser so you only need to enter it once.
+已知坑：BigModel 走 Anthropic 兼容协议时也必须这样配。`model: "glm-5.1"` 是错误写法，问题不在协议，而在 Claude Code SDK 的模型别名层；正确形态是 `model: "sonnet"` 搭配 `providerModel: "glm-..."`。切换供应商模型时只改 `providerModel`，不要新增硬编码兼容逻辑。
 
-## Build for packaged runtime
-
-You usually do not need to run this by hand: `python -m build` invokes the WebUI build automatically when packaging the wheel.
-
-If you want to preview the production bundle locally without rebuilding the wheel:
+## 常用命令
 
 ```bash
 cd webui
-bun run build          # writes to ../claudebot/web/dist
+bun run dev       # Vite dev server
+bun run build     # tsc + vite build
+bun run test      # Vitest
+bun run lint      # ESLint，warning 也会失败
 ```
 
-The gateway picks up the new bundle on the next restart.
+## 局域网访问
 
-## Test
-
-```bash
-cd webui
-bun run test
-```
-
-## Acknowledgements
-
-- [`agent-chat-ui`](https://github.com/langchain-ai/agent-chat-ui) for UI and
-  interaction inspiration across the chat surface.
+gateway 当前没有认证。只在可信网络中把 `gateway.host` 设为 `0.0.0.0`，不要把本地开发实例暴露到不可信网络。

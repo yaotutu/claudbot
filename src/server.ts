@@ -65,9 +65,14 @@ const url = `http://${config.gateway.host}:${config.gateway.port}`;
 console.log(`claudebot runtime listening on ${url}`);
 console.log(`  config:  ${formatConfigSource(loaded.source)}`);
 console.log(`  home:    ${config.home}`);
-console.log(`  model:   ${config.claudeCode.model}`);
+console.log(`  model:   ${config.claudeCode.model}${config.claudeCode.providerModel ? ` -> ${config.claudeCode.providerModel}` : ""}`);
 if (loaded.source.kind === "defaults") {
-  console.warn(`  ⚠️  No config file found. Set CLAUDEBOT_CONFIG or create ${config.home}/config.json to customize.`);
+  console.warn(`  ⚠️  No usable config file. Set CLAUDEBOT_CONFIG or fix/create ${config.home}/config.json.`);
+}
+if (loaded.source.kind === "created") {
+  console.warn(`  ⚠️  Created starter config at ${loaded.source.path}`);
+  console.warn("     Edit claudeCode.apiKey/baseUrl/providerModel there, then restart claudebot.");
+  console.warn('     Keep claudeCode.model as "sonnet", "haiku", or "opus"; put GLM names in providerModel.');
 }
 
 // Graceful shutdown — stop scheduler and close server.

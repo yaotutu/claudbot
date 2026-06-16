@@ -380,10 +380,7 @@ git commit -m "test(webui): align tests with native data layer"
 
 运行：
 
-```bash
-cd /home/yaotutu/code/skills-edit/skills/browser-cdp
-uv run cdp.py new http://127.0.0.1:5173
-```
+使用当前会话提供的 Chromium CDP 工具打开 `http://127.0.0.1:5173`。
 
 - [ ] **Step 3：首屏截图和断言**
 

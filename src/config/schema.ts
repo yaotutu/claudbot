@@ -3,6 +3,9 @@ import { z } from "zod/v4";
 export const PermissionModeSchema = z.enum(["default", "acceptEdits", "bypassPermissions"]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
+export const ClaudeCodeModelSchema = z.enum(["haiku", "sonnet", "opus"]);
+export type ClaudeCodeModel = z.infer<typeof ClaudeCodeModelSchema>;
+
 export const ToolPolicySchema = z.enum(["allow", "deny", "confirm"]);
 
 const GatewaySchema = z.object({
@@ -13,7 +16,8 @@ const GatewaySchema = z.object({
 const ClaudeCodeSchema = z.object({
   baseUrl: z.string().default(""),
   apiKey: z.string().default(""),
-  model: z.string().default("glm-5.1"),
+  model: ClaudeCodeModelSchema.default("sonnet"),
+  providerModel: z.string().default(""),
   permissionMode: PermissionModeSchema.default("bypassPermissions"),
   maxTurns: z.number().int().min(1).default(200),
 });
@@ -167,7 +171,8 @@ export const RuntimeConfigSchema = z.object({
   claudeCode: ClaudeCodeSchema.default({
     baseUrl: "",
     apiKey: "",
-    model: "glm-5.1",
+    model: "sonnet",
+    providerModel: "",
     permissionMode: "bypassPermissions",
     maxTurns: 200,
   }),
