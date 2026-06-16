@@ -46,6 +46,7 @@ describe("conversation runUserTurn", () => {
     expect(events.map((event) => event.type)).toEqual([
       "run.started",
       "session.created",
+      "run.status",
       "run.delta",
       "run.completed",
       "message.appended",

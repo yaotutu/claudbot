@@ -23,7 +23,8 @@ import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
 import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
-import type { SessionStore as SDKSessionStore } from "@anthropic-ai/claude-agent-sdk";
+import { createAgentRuntimeManager, type AgentRuntimeQueryFactory } from "../agent/runtime-manager.ts";
+import type { SDKUserMessage, SessionStore as SDKSessionStore } from "@anthropic-ai/claude-agent-sdk";
 
 export type ServiceContainer = {
   config: RuntimeConfig;
@@ -39,6 +40,7 @@ export type ServiceContainer = {
   trigger: SchedulerTrigger;
   toolRegistry: ToolRegistry;
   queryFactory: QueryFactory;
+  agentRuntimeManager: ReturnType<typeof createAgentRuntimeManager>;
   sdkSessionStore: SDKSessionStore;
   sessions: ClaudebotSessionService;
   makeRunner: (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string) => ClaudeRunner;
@@ -51,6 +53,7 @@ export type ServiceDeps = {
    *  as "defaults". Prefer `loaded` in new code. */
   config?: RuntimeConfig;
   queryFactory?: QueryFactory;
+  agentRuntimeQueryFactory?: AgentRuntimeQueryFactory;
   paths?: RuntimePaths;
 };
 
@@ -105,6 +108,21 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   // 5. Query factory (uses registry — no cycle)
   const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sdkSessionStore);
 
+  const agentRuntimeManager = createAgentRuntimeManager({
+    config,
+    registry: toolRegistry,
+    sdkConfigDir: paths.sdkConfigDir,
+    sessionStore: sdkSessionStore,
+    queryFactory: deps.agentRuntimeQueryFactory ?? (deps.queryFactory ? adaptQueryFactoryForRuntime(deps.queryFactory, paths) : undefined),
+    promptInputs: {
+      home: paths.home,
+      workspacePath: paths.workspace,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      userFile: paths.userFile,
+      soulFile: paths.soulFile,
+    },
+  });
+
   // 6. Trigger (uses store + executor that closes over queryFactory — no cycle)
   triggerRef = createSchedulerTrigger(schedulerStore, async (sched, run) => {
     return runScheduledTurn(sched, run, config, toolRegistry, paths, queryFactory, notifier);
@@ -143,10 +161,55 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     trigger: triggerRef,
     toolRegistry,
     queryFactory,
+    agentRuntimeManager,
     sdkSessionStore,
     sessions,
     makeRunner,
   };
+}
+
+function adaptQueryFactoryForRuntime(queryFactory: QueryFactory, paths: RuntimePaths): AgentRuntimeQueryFactory {
+  return async ({ input, options }) => {
+    let closed = false;
+    return {
+      stream: (async function* () {
+        for await (const message of input) {
+          if (closed) return;
+          const prompt = promptFromSdkUserMessage(message);
+          for await (const event of queryFactory({
+            prompt,
+            resumeSessionId: typeof options.resume === "string" ? options.resume : undefined,
+            systemPrompt: String(options.systemPrompt || ""),
+            toolContext: {
+              source: "user_turn",
+              home: paths.home,
+              workspacePath: paths.workspace,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              sessionId: typeof options.resume === "string" ? options.resume : undefined,
+              services: null,
+            },
+          })) {
+            yield event;
+          }
+        }
+      })(),
+      interrupt: async () => undefined,
+      close: () => { closed = true; },
+    };
+  };
+}
+
+function promptFromSdkUserMessage(message: SDKUserMessage): string {
+  const content = message.message.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object" && "text" in part && typeof part.text === "string") return part.text;
+      return JSON.stringify(part);
+    }).join("\n");
+  }
+  return JSON.stringify(content);
 }
 
 function buildToolRegistry(

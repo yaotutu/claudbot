@@ -16,7 +16,7 @@ This MVP focuses on the runtime required by the WebUI. CLI chat, multi-channel d
 - A config file can specify `home`, allowing multiple independent instances.
 - Default workspace is `<home>/workspace`.
 - All local storage uses JSON or Markdown files.
-- Do not migrate old Python data, but continue using the `~/.claudebot` default location.
+- Do not migrate data from the old implementation, but continue using the `~/.claudebot` default location.
 - Use Claude Agent SDK.
 - Default Claude permission mode is `bypassPermissions`.
 - Use Claude Agent SDK in-process SDK MCP server for native tools.
@@ -52,7 +52,7 @@ This MVP focuses on the runtime required by the WebUI. CLI chat, multi-channel d
 - WebUI MCP preset management.
 - CLI app attachments.
 - WebUI native-tool confirmation dialogs.
-- Old Python config/session/scheduler migration.
+- Old implementation config/session/scheduler migration.
 - External database storage.
 
 ## Instance Layout

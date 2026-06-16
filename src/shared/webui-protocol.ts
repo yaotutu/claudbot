@@ -8,6 +8,7 @@ export type RuntimeInfo = {
   workspace: string;
   gateway: { host: string; port: number };
   model: string;
+  providerModel: string;
   permissionMode: string;
 };
 
@@ -78,6 +79,12 @@ export type ToolFrame = {
   isError?: boolean;
 };
 
+export type RuntimeMcpServerStatus = {
+  name: string;
+  status: string;
+  [key: string]: unknown;
+};
+
 export type ServerFrame =
   | { type: "session.activated"; sessionId: string | null }
   | { type: "session.created"; draftId?: string; session: SessionSummary }
@@ -87,6 +94,7 @@ export type ServerFrame =
   | { type: "run.delta"; sessionId: string; runId: string; text: string }
   | { type: "run.thinking"; sessionId: string; runId: string; text: string }
   | { type: "run.tool"; sessionId: string; runId: string; tool: ToolFrame }
+  | { type: "run.status"; sessionId?: string; runId?: string; status: string; mcpServers?: RuntimeMcpServerStatus[] }
   | { type: "run.completed"; sessionId: string; runId: string; isError: boolean; result?: string; totalCostUsd?: number }
   | { type: "run.error"; sessionId?: string; runId?: string; message: string }
   | { type: "schedule.updated"; schedule: ScheduleRecord }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { formatConfigSource, loadConfig, resolveRuntimeConfig } from "../src/config/loader.ts";
@@ -28,6 +28,8 @@ describe("runtime config", () => {
 
   test("channels default to webui enabled and external channels disabled", () => {
     const config = resolveRuntimeConfig({}, { homeEnv: "", configDir: "/tmp/cfg" });
+    expect(config.claudeCode.model).toBe("sonnet");
+    expect(config.claudeCode.providerModel).toBe("");
     expect(config.channels).toMatchObject({
       sendProgress: true,
       sendToolHints: false,
@@ -197,6 +199,97 @@ describe("runtime config", () => {
     expect(paths.claudeDir).toBe("/tmp/bot/claude");
     expect(paths.sdkConfigDir).toBe("/tmp/bot/claude/config");
   });
+
+  test("accepts stdio, sse, and http MCP server config", () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/bot",
+        mcp: {
+          strict: true,
+          servers: {
+            filesystem: {
+              type: "stdio",
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+              env: { NODE_ENV: "test" },
+              timeout: 30000,
+              alwaysLoad: false,
+            },
+            search: {
+              type: "sse",
+              url: "http://127.0.0.1:3001/sse",
+              headers: { Authorization: "Bearer token" },
+              timeout: 10000,
+              alwaysLoad: true,
+            },
+            docs: {
+              type: "http",
+              url: "http://127.0.0.1:3002/mcp",
+              headers: {},
+              timeout: 10000,
+              alwaysLoad: false,
+            },
+          },
+        },
+      },
+      {},
+    );
+
+    expect(config.mcp.strict).toBe(true);
+    expect(config.mcp.servers.filesystem.type).toBe("stdio");
+    expect(config.mcp.servers.search.type).toBe("sse");
+    expect(config.mcp.servers.docs.type).toBe("http");
+  });
+
+  test("defaults MCP config to strict with no external servers", () => {
+    const config = resolveRuntimeConfig({ home: "/tmp/bot" }, {});
+    expect(config.mcp).toEqual({ strict: true, servers: {} });
+  });
+
+  test("rejects external MCP server named claudebot", () => {
+    expect(() => resolveRuntimeConfig(
+      {
+        home: "/tmp/bot",
+        mcp: {
+          servers: {
+            claudebot: { type: "stdio", command: "node", args: ["server.js"] },
+          },
+        },
+      },
+      {},
+    )).toThrow(/claudebot/i);
+  });
+
+  test("rejects provider model names passed directly as claudeCode.model", () => {
+    const invalidInput = {
+      home: "/tmp/bot",
+      claudeCode: {
+        model: "glm-5.1",
+        providerModel: "glm-5.1",
+      },
+    } as unknown as Parameters<typeof resolveRuntimeConfig>[0];
+
+    expect(() => resolveRuntimeConfig(
+      invalidInput,
+      {},
+    )).toThrow(/haiku|sonnet|opus/);
+  });
+
+  test("accepts a single provider model mapped from the selected Claude Code alias", () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/bot",
+        claudeCode: {
+          model: "sonnet",
+          providerModel: "glm-4.7",
+        },
+      },
+      {},
+    );
+
+    expect(config.claudeCode.model).toBe("sonnet");
+    expect(config.claudeCode.providerModel).toBe("glm-4.7");
+  });
 });
 
 describe("loadConfig", () => {
@@ -215,38 +308,59 @@ describe("loadConfig", () => {
     }
   });
 
-  test("falls back to defaults when env var points at a missing file", async () => {
-    const loaded = await loadConfig({
-      envPath: "/nonexistent/path/to/cfg.json",
-      homeEnv: "/also-nonexistent",
-    });
-    expect(loaded.source.kind).toBe("defaults");
-    expect(loaded.config.gateway.host).toBe("0.0.0.0");
+  test("creates an editable config when env var points at a missing file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-env-missing-"));
+    const cfgPath = join(dir, "nested", "config.json");
+    try {
+      const loaded = await loadConfig({
+        envPath: cfgPath,
+        homeEnv: join(dir, "home"),
+      });
+      expect(loaded.source).toEqual({ kind: "created", path: cfgPath });
+      expect(loaded.config.gateway.host).toBe("127.0.0.1");
+      expect(loaded.config.claudeCode.apiKey).toBe("");
+
+      const written = JSON.parse(await readFile(cfgPath, "utf8")) as { gateway?: { host?: string }; claudeCode?: { model?: string; providerModel?: string } };
+      expect(written.gateway?.host).toBe("127.0.0.1");
+      expect(written.claudeCode?.model).toBe("sonnet");
+      expect(written.claudeCode?.providerModel).toBe("");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("auto-discovers <home>/config.json when env var is unset", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-home-"));
     await writeFile(
       join(dir, "config.json"),
-      JSON.stringify({ gateway: { host: "127.0.0.1", port: 18790 }, claudeCode: { model: "glm-cn/glm-5.1" } }),
+      JSON.stringify({ gateway: { host: "127.0.0.1", port: 18790 }, claudeCode: { model: "sonnet", providerModel: "glm-4.7" } }),
     );
     try {
       const loaded = await loadConfig({ homeEnv: dir });
       expect(loaded.source.kind).toBe("home");
       expect(loaded.source.kind === "home" && loaded.source.path).toBe(join(dir, "config.json"));
       expect(loaded.config.gateway.host).toBe("127.0.0.1");
-      expect(loaded.config.claudeCode.model).toBe("glm-cn/glm-5.1");
+      expect(loaded.config.claudeCode.model).toBe("sonnet");
+      expect(loaded.config.claudeCode.providerModel).toBe("glm-4.7");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("uses defaults when neither env var nor home config exist", async () => {
+  test("creates an editable home config when neither env var nor home config exist", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-empty-"));
     try {
       const loaded = await loadConfig({ homeEnv: dir });
-      expect(loaded.source.kind).toBe("defaults");
-      expect(loaded.config.gateway.host).toBe("0.0.0.0");
+      const configPath = join(dir, "config.json");
+      expect(loaded.source).toEqual({ kind: "created", path: configPath });
+      expect(loaded.config.home).toBe(dir);
+      expect(loaded.config.workspace.path).toBe(join(dir, "workspace"));
+      expect(loaded.config.gateway.host).toBe("127.0.0.1");
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        home: dir,
+        workspace: { path: join(dir, "workspace") },
+        gateway: { host: "127.0.0.1", port: 18790 },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -265,6 +379,7 @@ describe("loadConfig", () => {
         expect(loaded.source.kind).toBe("defaults");
         expect(warnings.length).toBeGreaterThan(0);
         expect(warnings[0]).toContain("failed to parse");
+        expect(await readFile(join(dir, "config.json"), "utf8")).toBe("{ this is not json");
       } finally {
         console.warn = orig;
       }
@@ -298,6 +413,9 @@ describe("formatConfigSource", () => {
     expect(formatConfigSource({ kind: "home", path: "/h/config.json" })).toBe("/h/config.json (auto-discovered)");
   });
   test("defaults", () => {
-    expect(formatConfigSource({ kind: "defaults" })).toBe("schema defaults (no config file found)");
+    expect(formatConfigSource({ kind: "defaults" })).toBe("schema defaults (no usable config file)");
+  });
+  test("created", () => {
+    expect(formatConfigSource({ kind: "created", path: "/h/config.json" })).toBe("/h/config.json (created from defaults; edit this file)");
   });
 });

@@ -150,7 +150,8 @@ describe("gateway HTTP", () => {
       home: dir,
       workspace: join(dir, "workspace"),
       gateway: { host: "0.0.0.0", port: 18790 },
-      model: "glm-5.1",
+      model: "sonnet",
+      providerModel: "",
       permissionMode: "bypassPermissions",
     });
   });
@@ -370,6 +371,38 @@ describe("ClaudeRunner end-to-end (mocked query factory)", () => {
 });
 
 describe("runUserTurn", () => {
+  test("uses agentRuntimeManager and remaps draft runtime to SDK session", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const sent: unknown[] = [];
+    const calls: Array<{ sessionId: string; content: string; runId?: string; resumeSessionId?: string }> = [];
+    const remaps: Array<{ from: string; to: string }> = [];
+    services.agentRuntimeManager = {
+      ...services.agentRuntimeManager,
+      runTurn: async (args: { sessionId: string; content: string; runId?: string; resumeSessionId?: string; onEvent?: (event: unknown) => void }) => {
+        calls.push(args);
+        const events = [
+          { type: "status", status: "session_init", sessionId: "sdk-session-1" },
+          { type: "text_delta", text: "pong", sessionId: "sdk-session-1" },
+          { type: "turn_done", sessionId: "sdk-session-1", isError: false, result: "pong" },
+        ];
+        for (const event of events) args.onEvent?.(event);
+        return { runId: args.runId || "r1", events };
+      },
+      remapSession: (from: string, to: string) => { remaps.push({ from, to }); },
+    } as never;
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "ping", draftId: "draft-1" },
+      { send: (event) => { sent.push(event); } },
+    );
+
+    expect(calls[0].sessionId).toBe("draft-1");
+    expect(calls[0].resumeSessionId).toBeUndefined();
+    expect(remaps).toEqual([{ from: "draft-1", to: "sdk-session-1" }]);
+    expect(sent.map((m) => (m as { type: string }).type)).toContain("session.created");
+  });
+
   test("emits native run frames and creates a persisted session from a draft", async () => {
     const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
     const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
@@ -389,6 +422,7 @@ describe("runUserTurn", () => {
     expect(types).toEqual([
       "run.started",
       "session.created",
+      "run.status",
       "run.delta",
       "run.completed",
       "message.appended",
@@ -416,11 +450,51 @@ describe("runUserTurn", () => {
     // The runner stream is forwarded through the claudebot-native run frames.
     const types = sent.map((m) => (m as { type: string }).type);
     expect(types.every((type) => !type.startsWith("agent."))).toBe(true);
+    expect(types).toContain("run.status");
     expect(types).toContain("run.delta");
     expect(types).toContain("run.completed");
     // The final assistant message goes out as a single message.appended frame.
     expect(types).toContain("message.appended");
     const appended = sent.find((m) => (m as { type: string }).type === "message.appended") as { type: string; message: { role: string; content: string } } | undefined;
     expect(appended?.message.role).toBe("assistant");
+  });
+
+  test("forwards MCP init status as run.status", async () => {
+    const init = {
+      type: "system",
+      subtype: "init",
+      session_id: "sess_mcp",
+      mcp_servers: [{ name: "filesystem", status: "connected" }],
+    } as SdkMessage;
+    const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
+    const factory = makeRecordingQueryFactory([init, result]);
+    const { services } = await makeServices(factory);
+
+    const sent: unknown[] = [];
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "hi" },
+      { send: (event) => { sent.push(event); } },
+    );
+
+    const status = sent.find((m) => (m as { type: string }).type === "run.status") as { mcpServers?: Array<{ name: string; status: string }> } | undefined;
+    expect(status?.mcpServers).toEqual([{ name: "filesystem", status: "connected" }]);
+  });
+});
+
+describe("cancelUserTurn", () => {
+  test("delegates to agent runtime manager", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    let cancelled = "";
+    services.agentRuntimeManager = {
+      ...services.agentRuntimeManager,
+      cancel: async (sessionId: string) => { cancelled = sessionId; },
+    } as never;
+
+    const { cancelUserTurn } = await import("../src/gateway/websocket.ts");
+    await cancelUserTurn(services, "s1");
+
+    expect(cancelled).toBe("s1");
   });
 });

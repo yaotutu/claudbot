@@ -75,8 +75,14 @@ async function handleClientMessage(
       return;
     }
     case "chat.cancel": {
-      // MVP: cancellation handled at the runner level; not implemented in MVP.
+      await cancelUserTurn(services, msg.sessionId);
       return;
     }
   }
 }
+
+
+export async function cancelUserTurn(services: ServiceContainer, sessionId: string): Promise<void> {
+  await services.agentRuntimeManager.cancel(sessionId);
+}
+

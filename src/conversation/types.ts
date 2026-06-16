@@ -17,6 +17,7 @@ export type ConversationEvent = Extract<ServerFrame,
   | { type: "run.delta" }
   | { type: "run.thinking" }
   | { type: "run.tool" }
+  | { type: "run.status" }
   | { type: "run.completed" }
   | { type: "run.error" }
 >;

@@ -93,7 +93,11 @@ Git 历史基本遵循 Conventional Commits，例如 `fix(webui): ...`、`refact
 
 ## 安全与配置提示
 
-配置加载顺序为 `CLAUDEBOT_CONFIG`、`$CLAUDEBOT_HOME/config.json`，最后使用 schema 默认值。gateway 当前没有认证，且默认使用便于局域网访问的 host；不要把本地开发实例暴露到不可信网络。
+配置加载顺序为 `CLAUDEBOT_CONFIG`、`$CLAUDEBOT_HOME/config.json`；如果目标配置不存在，运行时会自动创建 starter config 并提示用户编辑；只有创建失败或已有配置文件无法解析时才使用 schema 默认值。gateway 当前没有认证，不要把本地开发实例暴露到不可信网络。
+
+`claudeCode.model` 必须保持为 Claude Code 认识的 `haiku`、`sonnet` 或 `opus`；供应商实际模型写在 `claudeCode.providerModel`，例如 BigModel 使用 `model: "sonnet"`、`providerModel: "glm-4.7"`。不要把 `glm-*` 直接写进 `claudeCode.model`。
+
+已知事故记录：2026-06-16 排查 BigModel 接入失败时，根因不是 BigModel 不支持 Anthropic 协议，而是本项目把 `glm-5.1` 直接传给了 Claude Code SDK 的 `model` 字段。Claude Code SDK 的 `model` 层只接受自己的模型别名；供应商模型必须通过 `ANTHROPIC_DEFAULT_HAIKU_MODEL`、`ANTHROPIC_DEFAULT_SONNET_MODEL` 或 `ANTHROPIC_DEFAULT_OPUS_MODEL` 映射。以后新增供应商或切换模型时，不要按供应商名改代码分支；只改 `providerModel` 映射和配置示例，并用真实 SDK/CDP 验证。
 
 
 

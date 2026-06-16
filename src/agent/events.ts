@@ -5,9 +5,11 @@ export type NormalizedEvent =
   | { type: "thinking_delta"; thinking: string; sessionId?: string }
   | { type: "tool_start"; id: string; name: string; input: unknown; sessionId?: string }
   | { type: "tool_result"; id: string; output: unknown; isError: boolean; sessionId?: string }
-  | { type: "status"; status: string; sessionId?: string }
+  | { type: "status"; status: string; sessionId?: string; mcpServers?: McpServerStatus[] }
   | { type: "turn_done"; sessionId: string; isError: boolean; result: string; totalCostUsd?: number }
   | { type: "error"; message: string; sessionId?: string };
+
+export type McpServerStatus = { name: string; status: string; [key: string]: unknown };
 
 export type AssistantContent =
   | { type: "text"; text: string }
@@ -26,6 +28,7 @@ export type SdkMessage = {
   tool_use_result?: unknown;
   is_error?: boolean;
   session_id?: string;
+  mcp_servers?: McpServerStatus[];
   result?: string;
   total_cost_usd?: number;
   num_turns?: number;
