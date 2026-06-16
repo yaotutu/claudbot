@@ -36,7 +36,7 @@
 - Modify: `src/channels/runtime.ts`
 - Modify: `tests/channels-runtime.test.ts`
 
-- [ ] **Step 1: Write failing runtime tests for `chatId/sessionKey`**
+- [x] **Step 1: Write failing runtime tests for `chatId/sessionKey`**
 
 Replace `conversationId` assertions in `tests/channels-runtime.test.ts` with `chatId`, and add one test proving `sessionKey` controls binding lookup:
 
@@ -54,13 +54,13 @@ expect(await services.channelBindings.find("telegram", "telegram:thread:42")).to
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/channels-runtime.test.ts --timeout 30000`
 
 Expected: TypeScript/runtime failures because `chatId`, `externalChatId`, and `sessionKey` binding semantics are not implemented yet.
 
-- [ ] **Step 3: Add protocol types**
+- [x] **Step 3: Add protocol types**
 
 Create `src/channels/protocol.ts`:
 
@@ -120,7 +120,7 @@ export function channelSessionKey(inbound: Pick<ChannelInboundMessage, "channel"
 
 Update `src/channels/types.ts` to re-export from `protocol.ts`.
 
-- [ ] **Step 4: Update `runChannelTurn`**
+- [x] **Step 4: Update `runChannelTurn`**
 
 Change `src/channels/runtime.ts` to use `chatId` and `channelSessionKey(inbound)`:
 
@@ -131,13 +131,13 @@ const existing = await services.channelBindings.find(inbound.channel, externalCh
 
 Upsert `externalChatId`, and return outbound `chatId: inbound.chatId`.
 
-- [ ] **Step 5: Run runtime tests**
+- [x] **Step 5: Run runtime tests**
 
 Run: `bun test tests/channels-runtime.test.ts --timeout 30000`
 
 Expected: PASS after binding store is updated in Task 2; before Task 2, failures should point only to `externalChatId` store shape.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/channels/protocol.ts src/channels/types.ts src/channels/runtime.ts tests/channels-runtime.test.ts
@@ -155,7 +155,7 @@ git commit -m "refactor(channels): define nanobot-style protocol"
 - Modify: `tests/telegram-webhook.test.ts`
 - Modify: `tests/qq-adapter.test.ts`
 
-- [ ] **Step 1: Write failing binding tests**
+- [x] **Step 1: Write failing binding tests**
 
 Update `tests/channels-session-bindings.test.ts` so every upsert uses `externalChatId`:
 
@@ -173,13 +173,13 @@ expect(await store.find("telegram", "telegram:chat-1")).toMatchObject({
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/channels-session-bindings.test.ts --timeout 30000`
 
 Expected: FAIL because `externalChatId` is not accepted by the store yet.
 
-- [ ] **Step 3: Rename store fields**
+- [x] **Step 3: Rename store fields**
 
 In `src/channels/session-bindings-store.ts`, replace `externalConversationId` with `externalChatId` in `find`, `upsert`, `delete`, and matching predicates.
 
@@ -189,17 +189,17 @@ The `find` signature becomes:
 find: (channel: ChannelId, externalChatId: string) => Promise<ChannelSessionBinding | null>;
 ```
 
-- [ ] **Step 4: Update remaining binding assertions**
+- [x] **Step 4: Update remaining binding assertions**
 
 Update all tests that inspect bindings to expect `externalChatId`, including Telegram and QQ adapter tests.
 
-- [ ] **Step 5: Run binding and runtime tests**
+- [x] **Step 5: Run binding and runtime tests**
 
 Run: `bun test tests/channels-session-bindings.test.ts tests/channels-runtime.test.ts tests/telegram-webhook.test.ts tests/qq-adapter.test.ts --timeout 30000`
 
 Expected: PASS for binding/runtime tests after adapter tests are updated in later tasks; failures before Task 4 should point to old adapter inputs only.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/channels/session-bindings-store.ts tests/channels-session-bindings.test.ts tests/channels-runtime.test.ts tests/telegram-webhook.test.ts tests/qq-adapter.test.ts
@@ -218,7 +218,7 @@ git commit -m "refactor(channels): rename bindings to external chat ids"
 - Modify: `src/server.ts`
 - Modify: `tests/channels-registry.test.ts`
 
-- [ ] **Step 1: Write failing manager tests**
+- [x] **Step 1: Write failing manager tests**
 
 Update `tests/channels-registry.test.ts` to import `createChannelManager` from `src/channels/manager.ts`. Add a fake adapter test:
 
@@ -245,13 +245,13 @@ await manager.start();
 await manager.stop();
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/channels-registry.test.ts --timeout 30000`
 
 Expected: FAIL because `createChannelManager` does not exist.
 
-- [ ] **Step 3: Add adapter contract**
+- [x] **Step 3: Add adapter contract**
 
 Create `src/channels/adapter.ts`:
 
@@ -282,7 +282,7 @@ export type ChannelAdapter = {
 export type ChannelInboundHandler = (message: ChannelInboundMessage) => Promise<void>;
 ```
 
-- [ ] **Step 4: Add manager**
+- [x] **Step 4: Add manager**
 
 Create `src/channels/manager.ts` with:
 
@@ -292,7 +292,7 @@ Create `src/channels/manager.ts` with:
 - `dispatchOutbound(outbound)` choosing `send`, `sendDelta`, `sendReasoningDelta`, or `sendReasoningEnd`
 - `sendWithRetry(adapter, outbound)` using `services.config.channels.sendMaxRetries`
 
-- [ ] **Step 5: Keep registry compatibility**
+- [x] **Step 5: Keep registry compatibility**
 
 Change `src/channels/registry.ts` to re-export:
 
@@ -303,13 +303,13 @@ export type { ChannelManager as ChannelRegistry, ChannelManagerDeps as ChannelRe
 
 Keep `createEmptyChannelRegistry()` as a thin manager-compatible object for existing imports.
 
-- [ ] **Step 6: Run manager tests**
+- [x] **Step 6: Run manager tests**
 
 Run: `bun test tests/channels-registry.test.ts --timeout 30000`
 
 Expected: PASS after Telegram/QQ factory wiring compiles in later tasks.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/channels/adapter.ts src/channels/manager.ts src/channels/registry.ts src/gateway/http.ts src/server.ts tests/channels-registry.test.ts
@@ -326,7 +326,7 @@ git commit -m "refactor(channels): add shared channel manager"
 - Modify: `tests/telegram-webhook.test.ts`
 - Modify: `tests/channels-registry.test.ts`
 
-- [ ] **Step 1: Write failing Telegram tests**
+- [x] **Step 1: Write failing Telegram tests**
 
 Update tests to expect:
 
@@ -345,13 +345,13 @@ const adapter = createTelegramAdapter(services, config, {
 });
 ```
 
-- [ ] **Step 2: Run Telegram tests to verify they fail**
+- [x] **Step 2: Run Telegram tests to verify they fail**
 
 Run: `bun test tests/telegram-webhook.test.ts tests/channels-registry.test.ts --timeout 30000`
 
 Expected: FAIL because Telegram still emits `conversationId` and directly calls the old runtime.
 
-- [ ] **Step 3: Update Telegram config type**
+- [x] **Step 3: Update Telegram config type**
 
 Add shared fields to `src/channels/telegram/types.ts`:
 
@@ -362,7 +362,7 @@ streaming: boolean;
 
 Retain `allowedChatIds` during this task as a Telegram-specific compatibility allowlist for webhook tests.
 
-- [ ] **Step 4: Update Telegram adapter**
+- [x] **Step 4: Update Telegram adapter**
 
 Return `ChannelAdapter` with `name: "telegram"` and `displayName: "Telegram"`. `handleHttp` normalizes Telegram updates to:
 
@@ -380,13 +380,13 @@ Return `ChannelAdapter` with `name: "telegram"` and `displayName: "Telegram"`. `
 
 Then call manager inbound hook or `runChannelTurn` through the manager-compatible context, and send via `adapter.send`.
 
-- [ ] **Step 5: Run Telegram tests**
+- [x] **Step 5: Run Telegram tests**
 
 Run: `bun test tests/telegram-webhook.test.ts tests/channels-registry.test.ts --timeout 30000`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/channels/telegram/adapter.ts src/channels/telegram/types.ts tests/telegram-webhook.test.ts tests/channels-registry.test.ts
@@ -403,7 +403,7 @@ git commit -m "refactor(channels): migrate telegram to channel protocol"
 - Modify: `tests/qq-adapter.test.ts`
 - Modify: `tests/channels-registry.test.ts`
 
-- [ ] **Step 1: Write failing QQ tests**
+- [x] **Step 1: Write failing QQ tests**
 
 Update binding expectations:
 
@@ -419,13 +419,13 @@ const binding = await services.channelBindings.find("qq", "qq:group:group-a");
 expect(binding?.externalUserId).toBe("member-a");
 ```
 
-- [ ] **Step 2: Run QQ tests to verify they fail**
+- [x] **Step 2: Run QQ tests to verify they fail**
 
 Run: `bun test tests/qq-adapter.test.ts tests/channels-registry.test.ts --timeout 30000`
 
 Expected: FAIL because QQ still emits old binding ids.
 
-- [ ] **Step 3: Update QQ config type**
+- [x] **Step 3: Update QQ config type**
 
 Add shared fields to `QqConfig` through schema in Task 6 and use them in tests:
 
@@ -436,7 +436,7 @@ streaming: boolean;
 
 Keep `allowedConversationIds`, `allowedUserIds`, and `allowedGroupOpenids` for QQ-specific allowlists during this migration.
 
-- [ ] **Step 4: Update QQ adapter**
+- [x] **Step 4: Update QQ adapter**
 
 Return `ChannelAdapter` with `name: "qq"` and `displayName: "QQ"`. Normalize QQ events to:
 
@@ -460,13 +460,13 @@ Return `ChannelAdapter` with `name: "qq"` and `displayName: "QQ"`. Normalize QQ 
 
 Keep passive `reply(event, content)` first and proactive fallback on failure.
 
-- [ ] **Step 5: Run QQ tests**
+- [x] **Step 5: Run QQ tests**
 
 Run: `bun test tests/qq-adapter.test.ts tests/channels-registry.test.ts --timeout 30000`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/channels/qq/adapter.ts src/channels/qq/types.ts tests/qq-adapter.test.ts tests/channels-registry.test.ts
@@ -482,7 +482,7 @@ git commit -m "refactor(channels): migrate qq to channel protocol"
 - Modify: `tests/config.test.ts`
 - Modify: `src/channels/README.md`
 
-- [ ] **Step 1: Write failing config tests**
+- [x] **Step 1: Write failing config tests**
 
 Update `tests/config.test.ts` to expect shared fields:
 
@@ -516,13 +516,13 @@ expect(config.channels.sendProgress).toBe(false);
 expect(config.channels.telegram.allowFrom).toEqual(["42"]);
 ```
 
-- [ ] **Step 2: Run config tests to verify they fail**
+- [x] **Step 2: Run config tests to verify they fail**
 
 Run: `bun test tests/config.test.ts --timeout 30000`
 
 Expected: FAIL because aliases and shared fields are not implemented yet.
 
-- [ ] **Step 3: Update config schema**
+- [x] **Step 3: Update config schema**
 
 In `src/config/schema.ts`, add shared fields to `ChannelsSchema` using zod alias/preprocess helpers where needed:
 
@@ -535,11 +535,11 @@ In `src/config/schema.ts`, add shared fields to `ChannelsSchema` using zod alias
 
 Read snake_case aliases: `send_progress`, `send_tool_hints`, `show_reasoning`, `send_max_retries`, `allow_from`.
 
-- [ ] **Step 4: Update README if implementation details changed**
+- [x] **Step 4: Update README if implementation details changed**
 
 Keep `src/channels/README.md` aligned with actual file names and config field names.
 
-- [ ] **Step 5: Run focused backend tests**
+- [x] **Step 5: Run focused backend tests**
 
 Run:
 
@@ -549,19 +549,19 @@ bun test tests/config.test.ts tests/channels-session-bindings.test.ts tests/chan
 
 Expected: PASS.
 
-- [ ] **Step 6: Run typecheck**
+- [x] **Step 6: Run typecheck**
 
 Run: `bun run typecheck`
 
 Expected: PASS with 0 TypeScript errors.
 
-- [ ] **Step 7: Run backend test suite**
+- [x] **Step 7: Run backend test suite**
 
 Run: `bun run test`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/config/schema.ts tests/config.test.ts src/channels/README.md
