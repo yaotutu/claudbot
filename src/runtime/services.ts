@@ -18,12 +18,14 @@ import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.t
 import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
 import { createNoopNotifier, type ScheduleNotifier } from "../scheduler/notify.ts";
 import { createNotificationStore, type NotificationStore } from "../notifications/store.ts";
+import { createChannelSessionBindingStore, type ChannelSessionBindingStore } from "../channels/session-bindings-store.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
 import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
-import type { SessionStore as SDKSessionStore } from "@anthropic-ai/claude-agent-sdk";
+import { createAgentRuntimeManager, type AgentRuntimeQueryFactory } from "../agent/runtime-manager.ts";
+import type { SDKUserMessage, SessionStore as SDKSessionStore } from "@anthropic-ai/claude-agent-sdk";
 
 export type ServiceContainer = {
   config: RuntimeConfig;
@@ -33,11 +35,13 @@ export type ServiceContainer = {
   memoryPaths: MemoryMarkdownPaths;
   schedulerStore: SchedulerStore;
   notificationStore: NotificationStore;
+  channelBindings: ChannelSessionBindingStore;
   storeOps: SchedulerStoreOps;
   notifier: ScheduleNotifier;
   trigger: SchedulerTrigger;
   toolRegistry: ToolRegistry;
   queryFactory: QueryFactory;
+  agentRuntimeManager: ReturnType<typeof createAgentRuntimeManager>;
   sdkSessionStore: SDKSessionStore;
   sessions: ClaudebotSessionService;
   makeRunner: (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string) => ClaudeRunner;
@@ -50,6 +54,7 @@ export type ServiceDeps = {
    *  as "defaults". Prefer `loaded` in new code. */
   config?: RuntimeConfig;
   queryFactory?: QueryFactory;
+  agentRuntimeQueryFactory?: AgentRuntimeQueryFactory;
   paths?: RuntimePaths;
 };
 
@@ -79,6 +84,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   await initMemoryMarkdownStore(memoryPaths);
   const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.scheduleRunsDir);
   const notificationStore = createNotificationStore(paths.notificationsFile);
+  const channelBindings = createChannelSessionBindingStore(paths.channelBindingsFile);
   const sessions = createSessionService({ sessionsDir: paths.sessionsDir, runtimeState });
   await sessions.clearStaleActiveSession();
 
@@ -111,6 +117,21 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
 
   // 5. Query factory (uses registry — no cycle)
   const queryFactory = deps.queryFactory ?? makeRealQueryFactory(toolRegistry, config, paths.sdkConfigDir, sdkSessionStore);
+
+  const agentRuntimeManager = createAgentRuntimeManager({
+    config,
+    registry: toolRegistry,
+    sdkConfigDir: paths.sdkConfigDir,
+    sessionStore: sdkSessionStore,
+    queryFactory: deps.agentRuntimeQueryFactory ?? (deps.queryFactory ? adaptQueryFactoryForRuntime(deps.queryFactory, paths) : undefined),
+    promptInputs: {
+      home: paths.home,
+      workspacePath: paths.workspace,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      userFile: paths.userFile,
+      soulFile: paths.soulFile,
+    },
+  });
 
   // 6. Trigger (uses store + executor that closes over queryFactory — no cycle)
   triggerRef = createSchedulerTrigger(schedulerStore, async (sched, run) => {
@@ -145,15 +166,61 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     memoryPaths,
     schedulerStore,
     notificationStore,
+    channelBindings,
     storeOps,
     notifier,
     trigger: triggerRef,
     toolRegistry,
     queryFactory,
+    agentRuntimeManager,
     sdkSessionStore,
     sessions,
     makeRunner,
   };
+}
+
+function adaptQueryFactoryForRuntime(queryFactory: QueryFactory, paths: RuntimePaths): AgentRuntimeQueryFactory {
+  return async ({ input, options }) => {
+    let closed = false;
+    return {
+      stream: (async function* () {
+        for await (const message of input) {
+          if (closed) return;
+          const prompt = promptFromSdkUserMessage(message);
+          for await (const event of queryFactory({
+            prompt,
+            resumeSessionId: typeof options.resume === "string" ? options.resume : undefined,
+            systemPrompt: String(options.systemPrompt || ""),
+            toolContext: {
+              source: "user_turn",
+              home: paths.home,
+              workspacePath: paths.workspace,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              sessionId: typeof options.resume === "string" ? options.resume : undefined,
+              services: null,
+            },
+          })) {
+            yield event;
+          }
+        }
+      })(),
+      interrupt: async () => undefined,
+      close: () => { closed = true; },
+    };
+  };
+}
+
+function promptFromSdkUserMessage(message: SDKUserMessage): string {
+  const content = message.message.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object" && "text" in part && typeof part.text === "string") return part.text;
+      return JSON.stringify(part);
+    }).join("\n");
+  }
+  return JSON.stringify(content);
 }
 
 function buildToolRegistry(
@@ -208,15 +275,14 @@ async function runScheduledTurn(
   let failedMessage = "";
   let execSessionId: string | undefined;
   for await (const ev of runner.run({ prompt })) {
+    if (ev.sessionId) execSessionId = ev.sessionId;
     if (ev.type === "text_delta") result += ev.text;
     if (ev.type === "turn_done") {
       result = ev.result || result;
-      if (ev.sessionId) execSessionId = ev.sessionId;
       if (ev.isError) failedMessage = ev.result || "scheduled turn failed";
     }
     if (ev.type === "error") {
       failedMessage = ev.message;
-      if (ev.sessionId) execSessionId = ev.sessionId;
     }
   }
   if (failedMessage) {
@@ -229,6 +295,7 @@ async function runScheduledTurn(
     }).catch((err) => {
       console.error("[scheduler] notifier.deliver failed:", err instanceof Error ? err.message : err);
     });
+    await cleanupExecutionSession(paths.sessionsDir, execSessionId);
     throw new Error(failedMessage);
   }
   const finalResult = result || `[定时任务 ${sched.name}] (no output)`;
@@ -246,15 +313,18 @@ async function runScheduledTurn(
 
   // Clean up the execution session — it's a background session that
   // should never appear in the user's sidebar.
-  if (execSessionId) {
-    const sessionDir = join(paths.sessionsDir, execSessionId);
-    try {
-      const { rm } = await import("node:fs/promises");
-      await rm(sessionDir, { recursive: true, force: true });
-    } catch {
-      // Non-critical — best effort cleanup
-    }
-  }
+  await cleanupExecutionSession(paths.sessionsDir, execSessionId);
 
   return finalResult;
+}
+
+async function cleanupExecutionSession(sessionsDir: string, execSessionId?: string): Promise<void> {
+  if (!execSessionId) return;
+  const sessionDir = join(sessionsDir, execSessionId);
+  try {
+    const { rm } = await import("node:fs/promises");
+    await rm(sessionDir, { recursive: true, force: true });
+  } catch {
+    // Non-critical — best effort cleanup
+  }
 }

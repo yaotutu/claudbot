@@ -20,6 +20,8 @@ export type RuntimePaths = {
   webuiDir: string;
   runtimeStateFile: string;
   notificationsFile: string;
+  channelBindingsFile: string;
+  qqSessionDir: string;
   mediaDir: string;
   logsDir: string;
   auditDir: string;
@@ -49,6 +51,8 @@ export function runtimePaths(config: RuntimeConfig): RuntimePaths {
     webuiDir: join(home, "webui"),
     runtimeStateFile: join(home, "webui", "runtime_state.json"),
     notificationsFile: join(home, "webui", "notifications.json"),
+    channelBindingsFile: join(home, "channels", "channel-bindings.json"),
+    qqSessionDir: join(home, "channels", "qq"),
     mediaDir: join(home, "media"),
     logsDir: join(home, "logs"),
     auditDir: join(home, "audit"),

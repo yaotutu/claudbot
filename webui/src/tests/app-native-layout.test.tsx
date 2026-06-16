@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import App from "@/App";
+import App, { pickWsUrl } from "@/App";
 import type { ServerFrame, WebuiBootstrap } from "@/lib/claudebot-types";
 
 const frameHandlers = new Set<(frame: ServerFrame) => void>();
@@ -15,7 +15,7 @@ let notificationRows: Array<Record<string, unknown>>;
 
 function persistedBootstrap(): WebuiBootstrap {
   return {
-    runtime: { home: "/tmp/home", workspace: "/tmp/workspace", gateway: { host: "127.0.0.1", port: 18790 }, model: "glm-5.1", permissionMode: "bypassPermissions" },
+    runtime: { home: "/tmp/home", workspace: "/tmp/workspace", gateway: { host: "127.0.0.1", port: 18790 }, model: "sonnet", providerModel: "glm-4.7", permissionMode: "bypassPermissions" },
     ws: { path: "/ws" },
     activeSessionId: "s1",
     sessions: [{ id: "s1", title: "hello", preview: "hello preview", createdAt: null, updatedAt: null, messageCount: 1, status: "persisted" }],
@@ -76,6 +76,15 @@ describe("App native layout", () => {
     close.mockClear();
   });
 
+  it("uses the runtime gateway port for websocket connections from any Vite dev port", () => {
+    expect(pickWsUrl(
+      "/ws",
+      persistedBootstrap().runtime,
+      { protocol: "http:", host: "127.0.0.1:5174", hostname: "127.0.0.1" },
+      true,
+    )).toBe("ws://127.0.0.1:18790/ws");
+  });
+
   it("renders persisted sessions and visible MVP panels", async () => {
     render(<App />);
 
@@ -87,7 +96,7 @@ describe("App native layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("运行状态")).toBeInTheDocument();
     expect(screen.getByText("/tmp/workspace")).toBeInTheDocument();
-    expect(screen.getAllByText("glm-5.1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("sonnet -> glm-4.7").length).toBeGreaterThan(0);
     expect(await screen.findByText("Memory")).toBeInTheDocument();
     expect(screen.getByText("MEMORY.md")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Run Dream" }));

@@ -324,6 +324,25 @@ describe("claude runner normalization", () => {
       expect(textEv.sessionId).toBeTruthy();
     }
   });
+
+  test("system init forwards MCP server status", async () => {
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([
+      {
+        type: "system",
+        subtype: "init",
+        session_id: "sess_init",
+        mcp_servers: [{ name: "filesystem", status: "connected" }],
+      },
+    ]));
+    const events = await collectEvents(runner.run({ prompt: "hi" }));
+    expect(events).toContainEqual({
+      type: "status",
+      status: "session_init",
+      sessionId: "sess_init",
+      mcpServers: [{ name: "filesystem", status: "connected" }],
+    });
+  });
 });
 
 describe("makeRealQueryFactory", () => {
@@ -367,7 +386,8 @@ describe("makeRealQueryFactory", () => {
         claudeCode: {
           baseUrl: "http://192.168.55.222:20128",
           apiKey: "sk-test-key",
-          model: "glm-cn/glm-5.1",
+          model: "sonnet",
+          providerModel: "glm-4.7",
           permissionMode: "bypassPermissions",
           maxTurns: 50,
         },
@@ -382,8 +402,35 @@ describe("makeRealQueryFactory", () => {
     // base URLs even though the proxy would accept either header. Mirror
     // the key into AUTH_TOKEN so the CLI's own auth check passes.
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test-key");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("glm-4.7");
+    expect(env.API_TIMEOUT_MS).toBe("3000000");
+    expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
+    expect(env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBe("1");
+    expect(env.ENABLE_TOOL_SEARCH).toBe("0");
     // process.env must be preserved (PATH, HOME, etc.) per SDK docs.
     expect(env.PATH).toBe(process.env.PATH);
+  });
+
+  test("maps the selected Claude Code alias to a single provider model env var", async () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/x",
+        claudeCode: {
+          baseUrl: "https://open.bigmodel.cn/api/anthropic",
+          apiKey: "sk-test-key",
+          model: "opus",
+          providerModel: "glm-5.1",
+        },
+      },
+      {},
+    );
+    const opts = await invokeFactoryAndCapture(config);
+    const env = opts.env as Record<string, string | undefined>;
+
+    expect(opts.model).toBe("opus");
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("glm-5.1");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
   });
 
   test("falls back to process.env when config has no baseUrl/apiKey", async () => {
@@ -434,7 +481,8 @@ describe("makeRealQueryFactory", () => {
         claudeCode: {
           baseUrl: "http://x",
           apiKey: "sk-x",
-          model: "glm-cn/glm-5.1",
+          model: "sonnet",
+          providerModel: "glm-4.7",
           permissionMode: "bypassPermissions",
           maxTurns: 42,
         },
@@ -442,8 +490,28 @@ describe("makeRealQueryFactory", () => {
       {},
     );
     const opts = await invokeFactoryAndCapture(config);
-    expect(opts.model).toBe("glm-cn/glm-5.1");
+    expect(opts.model).toBe("sonnet");
     expect(opts.permissionMode).toBe("bypassPermissions");
     expect(opts.maxTurns).toBe(42);
+  });
+
+  test("passes native and external MCP servers with strictMcpConfig", async () => {
+    const config = resolveRuntimeConfig(
+      {
+        home: "/tmp/x",
+        mcp: {
+          strict: true,
+          servers: {
+            filesystem: { type: "stdio", command: "node", args: ["fs-server.js"] },
+          },
+        },
+      },
+      {},
+    );
+    const opts = await invokeFactoryAndCapture(config);
+    const servers = opts.mcpServers as Record<string, unknown>;
+    expect(servers.claudebot).toBeDefined();
+    expect(servers.filesystem).toEqual({ type: "stdio", command: "node", args: ["fs-server.js"] });
+    expect(opts.strictMcpConfig).toBe(true);
   });
 });

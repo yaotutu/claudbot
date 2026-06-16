@@ -23,6 +23,7 @@ export function InfoPanel({ panel, runtime, onClose }: { panel: "settings" | "se
 function SettingsPanel({ runtime }: { runtime: RuntimeInfo }) {
   const [memory, setMemory] = useState<MemoryStatus | null>(null);
   const [message, setMessage] = useState("");
+  const modelLabel = formatModelLabel(runtime);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,7 +53,7 @@ function SettingsPanel({ runtime }: { runtime: RuntimeInfo }) {
   return (
     <div className="grid gap-3">
       <dl className="grid gap-2 text-xs">
-        <InfoRow label="Model" value={runtime.model} />
+        <InfoRow label="Model" value={modelLabel} />
         <InfoRow label="Workspace" value={runtime.workspace} />
         <InfoRow label="Home" value={runtime.home} />
         <InfoRow label="Gateway" value={`${runtime.gateway.host}:${runtime.gateway.port}`} />
@@ -75,6 +76,10 @@ function SettingsPanel({ runtime }: { runtime: RuntimeInfo }) {
       </section>
     </div>
   );
+}
+
+function formatModelLabel(runtime: RuntimeInfo): string {
+  return runtime.providerModel.length > 0 ? `${runtime.model} -> ${runtime.providerModel}` : runtime.model;
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {

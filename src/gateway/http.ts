@@ -2,6 +2,7 @@
 
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { AgentFileName } from "../agent/profile.ts";
+import type { ChannelRegistry } from "../channels/registry.ts";
 import { readMemoryFile } from "../memory/markdown-store.ts";
 import { initMemoryGitStore, listMemoryCommits, revertMemoryCommit, showMemoryCommitDiff } from "../memory/git-store.ts";
 import { collectPendingMemoryCandidates, runMemoryDream } from "../memory/dream.ts";
@@ -17,11 +18,15 @@ export async function handleHttp(
   req: Request,
   url: URL,
   services: ServiceContainer,
+  channelRegistry?: Pick<ChannelRegistry, "handleHttp">,
 ): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
 
   try {
+    const channelResponse = await channelRegistry?.handleHttp(req, url);
+    if (channelResponse) return channelResponse;
+
     if (path === "/health" && method === "GET") {
       return json(200, { status: "ok" });
     }
@@ -33,6 +38,7 @@ export async function handleHttp(
           gateway: services.config.gateway,
           claudeCode: {
             model: services.config.claudeCode.model,
+            providerModel: services.config.claudeCode.providerModel,
             permissionMode: services.config.claudeCode.permissionMode,
           },
           workspace: { path: services.paths.workspace },
@@ -252,6 +258,7 @@ function runtimeInfo(services: ServiceContainer) {
     workspace: services.paths.workspace,
     gateway: services.config.gateway,
     model: services.config.claudeCode.model,
+    providerModel: services.config.claudeCode.providerModel,
     permissionMode: services.config.claudeCode.permissionMode,
   };
 }

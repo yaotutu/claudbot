@@ -8,6 +8,7 @@ import { buildSystemPrompt, type PromptInputs } from "./prompt.ts";
 import type { AssistantContent, NormalizedEvent, SdkMessage, UserContent } from "./events.ts";
 import type { RuntimeConfig } from "../config/schema.ts";
 import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
+import { buildBaseSdkOptions } from "./sdk-options.ts";
 
 export type ClaudeRunnerDeps = {
   config: RuntimeConfig;
@@ -58,7 +59,7 @@ export class ClaudeRunner {
       for await (const raw of stream) {
         const msg = raw as SdkMessage;
         if (msg.session_id) lastSessionId = msg.session_id;
-        for (const ev of normalize(msg, lastSessionId)) {
+        for (const ev of normalizeSdkMessage(msg, lastSessionId)) {
           yield ev;
         }
       }
@@ -91,39 +92,13 @@ export function makeRealQueryFactory(
   return async function* ({ prompt, resumeSessionId, systemPrompt, toolContext }) {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const mcpServer = createClaudebotSdkMcpServer(registry, toolContext);
-    // The SDK's `Options.env` is the only way to point the Claude Code
-    // subprocess at a non-Anthropic endpoint — it has no direct `baseUrl`/
-    // `apiKey` fields. We translate our config into the env vars the
-    // subprocess reads, and spread `process.env` first so the subprocess
-    // still has PATH, HOME, etc. Config wins over process.env when set.
-    // We set both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN because the
-    // Claude Code CLI checks the AUTH_TOKEN variant when the base URL is
-    // a non-Anthropic host (proxy / OpenAI-compat / BigModel etc.) and
-    // 401s otherwise — even though the proxy itself would accept either.
-    // CLAUDE_CONFIG_DIR pins the SDK subprocess to a claudebot-owned
-    // config directory so its session storage lives under our home
-    // directory rather than the user's default ~/.claude.
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      CLAUDE_CONFIG_DIR: sdkConfigDir,
-      ...(config.claudeCode.baseUrl ? { ANTHROPIC_BASE_URL: config.claudeCode.baseUrl } : {}),
-      ...(config.claudeCode.apiKey
-        ? {
-            ANTHROPIC_API_KEY: config.claudeCode.apiKey,
-            ANTHROPIC_AUTH_TOKEN: config.claudeCode.apiKey,
-          }
-        : {}),
-    };
+    const baseOptions = buildBaseSdkOptions(config, sdkConfigDir, mcpServer);
     const stream = query({
       prompt,
       options: {
-        model: config.claudeCode.model,
+        ...baseOptions,
         systemPrompt,
-        permissionMode: config.claudeCode.permissionMode,
-        maxTurns: config.claudeCode.maxTurns,
-        env,
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
-        mcpServers: { claudebot: mcpServer },
         sessionStore,
       },
     });
@@ -133,7 +108,7 @@ export function makeRealQueryFactory(
 
 // --- Normalization --------------------------------------------------------
 
-function normalize(msg: SdkMessage, fallbackSessionId?: string): NormalizedEvent[] {
+export function normalizeSdkMessage(msg: SdkMessage, fallbackSessionId?: string): NormalizedEvent[] {
   const sid = msg.session_id || fallbackSessionId;
   switch (msg.type) {
     case "assistant": {
@@ -169,7 +144,7 @@ function normalize(msg: SdkMessage, fallbackSessionId?: string): NormalizedEvent
     }
     case "system": {
       if (msg.subtype === "thinking_tokens") return []; // noisy; ignore
-      if (msg.subtype === "init") return [{ type: "status", status: "session_init", sessionId: sid }];
+      if (msg.subtype === "init") return [{ type: "status", status: "session_init", sessionId: sid, mcpServers: msg.mcp_servers }];
       return [];
     }
     case "error": {

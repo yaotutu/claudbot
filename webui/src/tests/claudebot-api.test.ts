@@ -40,7 +40,8 @@ describe("claudebot native API client", () => {
           home: "/tmp/home",
           workspace: "/tmp/home/workspace",
           gateway: { host: "0.0.0.0", port: 18790 },
-          model: "glm-5.1",
+          model: "sonnet",
+          providerModel: "glm-4.7",
           permissionMode: "bypassPermissions",
         },
         ws: { path: "/ws" },
@@ -59,7 +60,8 @@ describe("claudebot native API client", () => {
 
     const boot = await fetchBootstrap();
 
-    expect(boot.runtime.model).toBe("glm-5.1");
+    expect(boot.runtime.model).toBe("sonnet");
+    expect(boot.runtime.providerModel).toBe("glm-4.7");
     expect(boot.ws.path).toBe("/ws");
     expect(boot.sessions[0]?.title).toBe("hello");
     expect(boot.activeSessionId).toBe("s1");
@@ -71,7 +73,8 @@ describe("claudebot native API client", () => {
         home: "/tmp/home",
         workspace: "/tmp/home/workspace",
         gateway: { host: "127.0.0.1", port: 18790 },
-        model: "glm-5.1",
+        model: "sonnet",
+        providerModel: "glm-4.7",
         permissionMode: "bypassPermissions",
       },
       ws: { path: "/ws" },
@@ -90,9 +93,9 @@ describe("claudebot native API client", () => {
         home: "/tmp/home",
         workspace: { path: "/tmp/home/workspace" },
         gateway: { host: "127.0.0.1", port: 18790 },
-        claudeCode: { model: "glm-5.1", permissionMode: "bypassPermissions" },
+        claudeCode: { model: "sonnet", providerModel: "glm-4.7", permissionMode: "bypassPermissions" },
       },
-      model_name: "glm-5.1",
+      model_name: "sonnet",
       ws_path: "/ws",
       sessions: [],
       lastActiveSessionId: "s1",
@@ -115,13 +118,14 @@ describe("claudebot native API client", () => {
   it("fetchRuntime reads read-only runtime info", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
       expect(String(url)).toBe("/api/runtime");
-      return jsonResponse({ home: "/h", workspace: "/w", gateway: { host: "127.0.0.1", port: 18790 }, model: "glm-5.1", permissionMode: "bypassPermissions" });
+      return jsonResponse({ home: "/h", workspace: "/w", gateway: { host: "127.0.0.1", port: 18790 }, model: "sonnet", providerModel: "glm-4.7", permissionMode: "bypassPermissions" });
     }));
 
     const runtime = await fetchRuntime();
 
     expect(runtime.workspace).toBe("/w");
     expect(runtime.gateway.port).toBe(18790);
+    expect(runtime.providerModel).toBe("glm-4.7");
   });
 
   it("fetches memory status and runs dream", async () => {

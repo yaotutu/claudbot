@@ -24,12 +24,19 @@ type BootState =
   | { status: "ready"; runtime: RuntimeInfo; wsPath: string; sessions: SessionSummary[]; activeSessionId: string | null };
 
 type Panel = "settings" | "search" | "skills" | "tasks" | null;
+type WsLocation = Pick<Location, "protocol" | "host" | "hostname">;
 
-function pickWsUrl(path: string, runtime: RuntimeInfo): string {
-  if (typeof window === "undefined") return `ws://127.0.0.1:${runtime.gateway.port}${path}`;
-  if (window.location.port === "5173") return `ws://${window.location.hostname}:${runtime.gateway.port}${path}`;
-  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${scheme}://${window.location.host}${path}`;
+export function pickWsUrl(
+  path: string,
+  runtime: RuntimeInfo,
+  location?: WsLocation,
+  isDev = import.meta.env.DEV,
+): string {
+  if (typeof window === "undefined" && !location) return `ws://127.0.0.1:${runtime.gateway.port}${path}`;
+  const currentLocation = location ?? window.location;
+  if (isDev) return `ws://${currentLocation.hostname}:${runtime.gateway.port}${path}`;
+  const scheme = currentLocation.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${currentLocation.host}${path}`;
 }
 
 export default function App() {
@@ -71,6 +78,7 @@ export default function App() {
 function ReadyApp({ boot }: { boot: Extract<BootState, { status: "ready" }> }) {
   const [panel, setPanel] = useState<Panel>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
+  const modelLabel = formatModelLabel(boot.runtime.model, boot.runtime.providerModel);
   const client = useMemo(() => new ClaudebotWsClient({ url: pickWsUrl(boot.wsPath, boot.runtime) }), [boot.runtime, boot.wsPath]);
 
   useEffect(() => {
@@ -142,7 +150,7 @@ function ReadyApp({ boot }: { boot: Extract<BootState, { status: "ready" }> }) {
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/40 px-5 text-sm text-muted-foreground">
           <span className="font-medium text-foreground">{sessions.activeSession?.title ?? "New chat"}</span>
-          <span className="rounded-full border border-border px-2 py-1">{boot.runtime.model}</span>
+          <span className="rounded-full border border-border px-2 py-1">{modelLabel}</span>
         </header>
         <ThreadArea
           messages={thread.messages}
@@ -159,6 +167,10 @@ function ReadyApp({ boot }: { boot: Extract<BootState, { status: "ready" }> }) {
       </main>
     </div>
   );
+}
+
+function formatModelLabel(model: string, providerModel: string): string {
+  return providerModel.length > 0 ? `${model} -> ${providerModel}` : model;
 }
 
 function Splash({ title, text }: { title?: string; text: string }) {

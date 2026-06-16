@@ -38,6 +38,40 @@ describe("gateway HTTP", () => {
     expect("sdkSessions" in services).toBe(false);
   });
 
+  test("service container exposes channel session bindings", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+
+    await services.channelBindings.upsert({
+      channel: "telegram",
+      externalConversationId: "chat-1",
+      claudebotSessionId: "sess-1",
+    });
+
+    expect(await services.channelBindings.find("telegram", "chat-1")).toMatchObject({
+      claudebotSessionId: "sess-1",
+    });
+  });
+
+  test("delegates channel HTTP routes before normal API handling", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const registry = {
+      handleHttp: async (_req: Request, url: URL) => {
+        if (url.pathname === "/channels/test") return new Response(JSON.stringify({ handled: true }), { status: 202 });
+        return null;
+      },
+    };
+
+    const res = await handleHttp(
+      new Request("http://x/channels/test", { method: "POST" }),
+      new URL("http://x/channels/test"),
+      services,
+      registry,
+    );
+
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ handled: true });
+  });
+
   test("GET /health returns ok", async () => {
     const { services } = await makeServices(makeRecordingQueryFactory([]));
     const res = await handleHttp(new Request("http://x/health"), new URL("http://x/health"), services);
@@ -117,7 +151,8 @@ describe("gateway HTTP", () => {
       home: dir,
       workspace: join(dir, "workspace"),
       gateway: { host: "0.0.0.0", port: 18790 },
-      model: "glm-5.1",
+      model: "sonnet",
+      providerModel: "",
       permissionMode: "bypassPermissions",
     });
   });
@@ -392,6 +427,38 @@ describe("ClaudeRunner end-to-end (mocked query factory)", () => {
 });
 
 describe("runUserTurn", () => {
+  test("uses agentRuntimeManager and remaps draft runtime to SDK session", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    const sent: unknown[] = [];
+    const calls: Array<{ sessionId: string; content: string; runId?: string; resumeSessionId?: string }> = [];
+    const remaps: Array<{ from: string; to: string }> = [];
+    services.agentRuntimeManager = {
+      ...services.agentRuntimeManager,
+      runTurn: async (args: { sessionId: string; content: string; runId?: string; resumeSessionId?: string; onEvent?: (event: unknown) => void }) => {
+        calls.push(args);
+        const events = [
+          { type: "status", status: "session_init", sessionId: "sdk-session-1" },
+          { type: "text_delta", text: "pong", sessionId: "sdk-session-1" },
+          { type: "turn_done", sessionId: "sdk-session-1", isError: false, result: "pong" },
+        ];
+        for (const event of events) args.onEvent?.(event);
+        return { runId: args.runId || "r1", events };
+      },
+      remapSession: (from: string, to: string) => { remaps.push({ from, to }); },
+    } as never;
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "ping", draftId: "draft-1" },
+      { send: (event) => { sent.push(event); } },
+    );
+
+    expect(calls[0].sessionId).toBe("draft-1");
+    expect(calls[0].resumeSessionId).toBeUndefined();
+    expect(remaps).toEqual([{ from: "draft-1", to: "sdk-session-1" }]);
+    expect(sent.map((m) => (m as { type: string }).type)).toContain("session.created");
+  });
+
   test("emits native run frames and creates a persisted session from a draft", async () => {
     const init = JSON.parse(readFileSync("tests/fixtures/sdk-events/01-init.json", "utf8")) as SdkMessage;
     const text = JSON.parse(readFileSync("tests/fixtures/sdk-events/05-text-assistant.json", "utf8")) as SdkMessage;
@@ -400,18 +467,18 @@ describe("runUserTurn", () => {
     const { services } = await makeServices(factory);
 
     const sent: unknown[] = [];
-    const fakeWs = {
-      send: (data: string) => sent.push(JSON.parse(data)),
-      data: { sessionId: "", services, send: (m: unknown) => sent.push(m) },
-    } as unknown as Parameters<typeof import("../src/gateway/websocket.ts").runUserTurn>[0];
-
-    const { runUserTurn } = await import("../src/gateway/websocket.ts");
-    await runUserTurn(fakeWs, services, null, "ping", { draftId: "draft-1" });
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "ping", draftId: "draft-1" },
+      { send: (event) => { sent.push(event); } },
+    );
 
     const types = sent.map((m) => (m as { type: string }).type);
     expect(types).toEqual([
       "run.started",
       "session.created",
+      "run.status",
       "run.delta",
       "run.completed",
       "message.appended",
@@ -428,25 +495,18 @@ describe("runUserTurn", () => {
     const factory = makeRecordingQueryFactory([init, text, result]);
     const { services } = await makeServices(factory);
 
-    // Stub WebSocket-like object: runUserTurn writes to ws.data.sessionId
-    // after the run, so the fake needs both `send` and a mutable `data`.
     const sent: unknown[] = [];
-    const fakeWs = {
-      send: (data: string) => sent.push(JSON.parse(data)),
-      data: { sessionId: "", services, send: (m: unknown) => sent.push(m) },
-    } as unknown as Parameters<typeof import("../src/gateway/websocket.ts").runUserTurn>[0];
-
-    const { runUserTurn } = await import("../src/gateway/websocket.ts");
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
     await runUserTurn(
-      fakeWs,
       services,
-      null,
-      "hi",
+      { source: "webui", sessionId: null, content: "hi" },
+      { send: (event) => { sent.push(event); } },
     );
 
     // The runner stream is forwarded through the claudebot-native run frames.
     const types = sent.map((m) => (m as { type: string }).type);
     expect(types.every((type) => !type.startsWith("agent."))).toBe(true);
+    expect(types).toContain("run.status");
     expect(types).toContain("run.delta");
     expect(types).toContain("run.completed");
     // The final assistant message goes out as a single message.appended frame.
@@ -524,5 +584,44 @@ describe("runUserTurn", () => {
     const memory = await readFile(services.paths.longTermMemoryFile, "utf8");
     expect(memory).not.toContain("我叫 yaotutu");
     expect(memory).not.toContain("我喜欢短回答");
+  });
+
+  test("forwards MCP init status as run.status", async () => {
+    const init = {
+      type: "system",
+      subtype: "init",
+      session_id: "sess_mcp",
+      mcp_servers: [{ name: "filesystem", status: "connected" }],
+    } as SdkMessage;
+    const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
+    const factory = makeRecordingQueryFactory([init, result]);
+    const { services } = await makeServices(factory);
+
+    const sent: unknown[] = [];
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "hi" },
+      { send: (event) => { sent.push(event); } },
+    );
+
+    const status = sent.find((m) => (m as { type: string }).type === "run.status") as { mcpServers?: Array<{ name: string; status: string }> } | undefined;
+    expect(status?.mcpServers).toEqual([{ name: "filesystem", status: "connected" }]);
+  });
+});
+
+describe("cancelUserTurn", () => {
+  test("delegates to agent runtime manager", async () => {
+    const { services } = await makeServices(makeRecordingQueryFactory([]));
+    let cancelled = "";
+    services.agentRuntimeManager = {
+      ...services.agentRuntimeManager,
+      cancel: async (sessionId: string) => { cancelled = sessionId; },
+    } as never;
+
+    const { cancelUserTurn } = await import("../src/gateway/websocket.ts");
+    await cancelUserTurn(services, "s1");
+
+    expect(cancelled).toBe("s1");
   });
 });

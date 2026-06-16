@@ -159,5 +159,6 @@ function isRuntimeInfo(value: unknown): value is RuntimeInfo {
     && typeof value.gateway.host === "string"
     && typeof value.gateway.port === "number"
     && typeof value.model === "string"
+    && typeof value.providerModel === "string"
     && typeof value.permissionMode === "string";
 }

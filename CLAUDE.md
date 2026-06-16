@@ -28,7 +28,7 @@ WebUI (Vite + React 18, lives at `webui/`):
 
 ```bash
 cd webui
-bun install              # (or npm install)
+bun install
 bun run dev              # vite dev server on :5173, proxies to gateway
 bun run build            # tsc + vite build → webui/dist/  (gateway serves this)
 bun run test             # vitest
@@ -47,7 +47,8 @@ Config is Zod-validated (`src/config/schema.ts`) and loaded in this order:
 
 1. `CLAUDEBOT_CONFIG` — explicit path to a JSON file. If set but the file is missing, a warning is logged and the runtime falls through.
 2. `$CLAUDEBOT_HOME/config.json` (default `~/.claudebot/config.json`) — auto-discovered. The common setup: edit this file, restart, done.
-3. Schema defaults — if neither is found, the runtime starts with built-in defaults and prints a warning to stderr.
+3. If no config file exists, the runtime creates a starter config at the target path, uses it for the current run, and prints a warning telling the user to edit `claudeCode.apiKey/baseUrl/providerModel`.
+4. Schema defaults — used only if starter config creation fails, or if an existing config file is invalid and must not be overwritten.
 
 The startup banner shows which one was used (`config:` line).
 
@@ -57,7 +58,9 @@ Env-var overrides for individual fields:
 - `CLAUDEBOT_HOST` → `gateway.host` (default `0.0.0.0` — LAN-friendly, no auth)
 - `CLAUDEBOT_PORT` → `gateway.port` (default `18790`)
 - `gateway` section: `host`, `port`
-- `claudeCode` section: `model` (default `glm-5.1`), `permissionMode` (default `bypassPermissions`), `maxTurns` (default `200`), `baseUrl`, `apiKey`
+- `claudeCode` section: `model` (default `sonnet`; only `haiku`/`sonnet`/`opus`), `providerModel` (actual provider model such as `glm-4.7`), `permissionMode` (default `bypassPermissions`), `maxTurns` (default `200`), `baseUrl`, `apiKey`
+- For Anthropic-compatible providers such as BigModel, keep `claudeCode.model` as a Claude Code alias and put the real model in `providerModel`. The runtime maps it to the matching `ANTHROPIC_DEFAULT_*_MODEL` env var before starting the SDK.
+- Incident note from 2026-06-16: BigModel was already speaking the Anthropic-compatible protocol. The failure came from passing `glm-5.1` directly as the Claude Code SDK `model`. Do not add provider-specific compatibility branches for this class of issue. Keep SDK `model` as `haiku`/`sonnet`/`opus`, map the provider model through `providerModel`, then verify with the live SDK and WebUI.
 - `tools.permissions`: `{ default: "allow", overrides: { toolName: "deny" } }` (`confirm` is accepted but treated as `deny` with a clear message)
 
 ## Server architecture
@@ -145,9 +148,10 @@ The WebUI is a Vite + React 18 + Tailwind 3 app using claudebot-native data, not
 
 - **No auth.** The gateway binds `0.0.0.0` by default; the WebUI has no token, no login. This is intentional for MVP testing. If you need auth, the spec calls for `token`/`tokenIssueSecret` in config — not implemented yet.
 - **Scheduler is a real executor.** `runScheduledTurn` in `src/runtime/services.ts` dispatches a real `ClaudeRunner.run()` call in a **new one-off session** (no `resumeSessionId`). After execution, the result is delivered via `ScheduleNotifier` into WebUI notifications (`notifications.json`) and broadcast as `notification.created` / `schedule.run.completed`. Background task results should not be appended into normal chat sessions.
-- **The webui `README.md` is stale.** It describes a Python/pip packaging flow that no longer applies (claudebot is Bun/TypeScript, not Python). The "just want to use the WebUI?" section is misleading. The accurate boot steps are the ones in this file's Commands section.
+- **WebUI docs follow the Bun/TypeScript runtime.** Keep `webui/README.md` aligned with the scripts in `package.json` and `webui/package.json`.
 - **`src/spikes/`** — diagnostic scripts from the SDK spike phase. Not part of the runtime; safe to delete if you need a cleanup.
-- **Live Claude SDK verification is blocked** in this environment (no working Anthropic auth for some endpoints). Mocked tests cover the runner, gateway, and stream hook paths. The `maybeChunk` chunker exists specifically to make the BigModel/glm-5.1 endpoint feel streaming; verify any change to it against a live call before shipping.
+- **Live Claude SDK verification depends on a configured provider key.** Mocked tests cover the runner, gateway, and stream hook paths. For BigModel, verify with `model: "sonnet"` and `providerModel` set to the actual GLM model rather than putting `glm-*` directly in `model`.
+- **Provider model names are not SDK model names.** If BigModel/another Anthropic-compatible provider works in Claude Code but fails here, first inspect the resolved SDK options and env vars. The expected shape is `options.model = "sonnet"` plus `ANTHROPIC_DEFAULT_SONNET_MODEL = "glm-..."`; `options.model = "glm-..."` is the known-bad pattern.
 
 # 以下规则为用户手动添加，禁止AI修改：
 - 优先使用函数式编程范式，避免使用类和面向对象的设计。

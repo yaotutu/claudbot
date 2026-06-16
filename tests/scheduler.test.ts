@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { runtimePaths } from "../src/config/paths.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import type { QueryFactory } from "../src/agent/runner.ts";
 import { createSdkJsonlSessionStore } from "../src/sessions/sdk-jsonl-store.ts";
+import { appendSessionJsonlEntry } from "../src/sessions/jsonl-store.ts";
 
 function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls: Array<{ prompt: string; resumeSessionId?: string }> } {
   const calls: Array<{ prompt: string; resumeSessionId?: string }> = [] as never;
@@ -442,6 +444,37 @@ describe("runScheduledTurn (wired into services)", () => {
       status: "failed",
       result: "Claude turn failed",
     });
+  });
+
+  test("removes failed scheduled execution sessions from the user-visible session list", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claudebot-sched-rt-"));
+    const config = resolveRuntimeConfig({ home: dir }, {});
+    const paths = runtimePaths(config);
+    const factory: QueryFactory = async function* () {
+      await appendSessionJsonlEntry(paths.sessionsDir, "sched-failed-cleanup", {
+        type: "user",
+        uuid: "u1",
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "scheduled prompt" },
+      });
+      yield { type: "system", subtype: "init", session_id: "sched-failed-cleanup" } as SdkMessage;
+      await appendSessionJsonlEntry(paths.sessionsDir, "sched-failed-cleanup", {
+        type: "assistant",
+        uuid: "a1",
+        timestamp: new Date().toISOString(),
+        message: { role: "assistant", content: "Not logged in" },
+      });
+      yield { type: "result", session_id: "sched-failed-cleanup", result: "Not logged in", is_error: true } as SdkMessage;
+    };
+    const services = await buildServices({ config, paths, queryFactory: factory });
+
+    const sched = await services.storeOps.create({ name: "broken", cronExpr: "* * * * *", timezone: "UTC", message: "fail" });
+    const run = await services.trigger.runNow(sched.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("Not logged in");
+    expect(existsSync(join(paths.sessionsDir, "sched-failed-cleanup"))).toBe(false);
+    expect((await services.sessions.listSummaries()).find((session) => session.id === "sched-failed-cleanup")).toBeUndefined();
   });
 });
 

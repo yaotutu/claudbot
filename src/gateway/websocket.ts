@@ -2,15 +2,10 @@
 
 import type { ServerWebSocket } from "bun";
 import type { ServiceContainer } from "../runtime/services.ts";
-import type { SessionSummaryWire, WsClientMessage, WsServerMessage } from "./protocol.ts";
-import type { NormalizedEvent } from "../agent/events.ts";
-import { runMemoryDream } from "../memory/dream.ts";
-import { detectMemoryIntent } from "../memory/intent.ts";
+import type { WsClientMessage, WsServerMessage } from "./protocol.ts";
+import { runUserTurn } from "../conversation/run-user-turn.ts";
 
-// SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
-// long so the SDK JSONL mirror has a chance to flush before we ack the WebUI.
-// If SDK adds a flush() signal in the future, replace this with that.
-const MIRROR_FLUSH_SETTLE_MS = 50;
+export { maybeRunExplicitMemoryDreamAfterTurn } from "../conversation/run-user-turn.ts";
 
 export type WsData = {
   sessionId: string;
@@ -73,169 +68,21 @@ async function handleClientMessage(
     }
     case "chat.send": {
       const explicitId = msg.sessionId || ws.data.sessionId || null;
-      await runUserTurn(ws, services, explicitId, msg.content, { draftId: msg.draftId });
+      const result = await runUserTurn(
+        services,
+        { source: "webui", sessionId: explicitId, content: msg.content, draftId: msg.draftId },
+        { send: (event) => send(ws, event) },
+      );
+      if (result.sessionId) ws.data.sessionId = result.sessionId;
       return;
     }
     case "chat.cancel": {
-      // MVP: cancellation handled at the runner level; not implemented in MVP.
+      await cancelUserTurn(services, msg.sessionId);
       return;
     }
   }
 }
 
-export async function runUserTurn(
-  ws: ServerWebSocket<WsData>,
-  services: ServiceContainer,
-  sessionId: string | null,
-  content: string,
-  options: { draftId?: string } = {},
-): Promise<void> {
-  const send = (m: WsServerMessage) => sendTo(ws, m);
-  const runId = crypto.randomUUID();
-  const initialRouteId = sessionId ?? options.draftId ?? "pending";
-  send({ type: "run.started", sessionId: initialRouteId, runId });
-
-  const sdkSessionId = await services.sessions.resolveResumeSessionId(sessionId);
-
-  // We need a session id before we can persist anything. If we don't have one
-  // yet, run the query and capture the new id from system/init or the result.
-  const runner = services.makeRunner("user_turn", sdkSessionId ?? "pending");
-  let lastSessionId: string | undefined = sdkSessionId;
-  let collected = "";
-  let turnErrored = false;
-  let finalResult = "";
-  let sessionCreated = false;
-
-  try {
-    for await (const ev of runner.run({ prompt: content, resumeSessionId: sdkSessionId })) {
-      // Surface mirror_error so WebUI status reflects SDK health
-      if (ev.type === "error" && ev.message.includes("mirror_error")) {
-        send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
-        continue;
-      }
-      if (ev.sessionId && ev.sessionId !== lastSessionId) {
-        lastSessionId = ev.sessionId;
-      }
-      if (!sdkSessionId && !sessionCreated && lastSessionId && lastSessionId !== "pending") {
-        sessionCreated = true;
-        send({
-          type: "session.created",
-          draftId: options.draftId,
-          session: draftSessionSummary(lastSessionId, content),
-        });
-      }
-      forwardNative(send, ev, runId, lastSessionId ?? initialRouteId);
-      if (ev.type === "text_delta") collected += ev.text;
-      if (ev.type === "turn_done") {
-        finalResult = ev.result;
-        if (ev.sessionId) lastSessionId = ev.sessionId;
-      }
-      if (ev.type === "error") {
-        turnErrored = true;
-        finalResult = `[error] ${ev.message}`;
-      }
-    }
-  } catch (err) {
-    turnErrored = true;
-    finalResult = `[error] ${err instanceof Error ? err.message : String(err)}`;
-  }
-
-  if (lastSessionId) {
-    await services.runtimeState.setLastActiveSession(lastSessionId, "user_message");
-    ws.data.sessionId = lastSessionId;
-  }
-
-  // Settle delay: sessionStoreFlush defaults to 'batched'. Give the mirror a
-  // beat to flush before WebUI reads the JSONL-backed session model.
-  await new Promise((r) => setTimeout(r, MIRROR_FLUSH_SETTLE_MS));
-
-  // First message in a new session — set the title from the user's message
-  // so the sidebar shows a meaningful name immediately and it persists across
-  // page refreshes.
-  if (!sdkSessionId && lastSessionId) {
-    try {
-      await services.sessions.rename(lastSessionId, content.slice(0, 60));
-    } catch { /* non-critical */ }
-  }
-
-  if (!sdkSessionId && !sessionCreated && lastSessionId) {
-    send({
-      type: "session.created",
-      draftId: options.draftId,
-      session: draftSessionSummary(lastSessionId, content),
-    });
-  }
-
-  const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
-  const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
-  await maybeRunExplicitMemoryDreamAfterTurn(services, content, activeSdkId, turnErrored);
-  send({ type: "run.completed", sessionId: activeSdkId, runId, isError: turnErrored, result: finalResult });
-  send({
-    type: "message.appended",
-    sessionId: activeSdkId,
-    message: {
-      id: `local-${Date.now()}`,
-      role: turnErrored ? "system" : "assistant",
-      content: finalText,
-      createdAt: new Date().toISOString(),
-      metadata: turnErrored ? { error: true } : {},
-    },
-  });
-}
-
-export async function maybeRunExplicitMemoryDreamAfterTurn(
-  services: ServiceContainer,
-  content: string,
-  sessionId: string | undefined,
-  turnErrored: boolean,
-): Promise<void> {
-  if (turnErrored || !sessionId || sessionId === "pending") return;
-  const intent = detectMemoryIntent(content);
-  if (intent.type !== "explicit") return;
-  try {
-    await runMemoryDream(services.memoryPaths, { dryRun: false, sessionId, includeEventCandidates: false });
-  } catch (err) {
-    console.error("[memory] explicit dream failed:", err instanceof Error ? err.message : err);
-  }
-}
-
-function draftSessionSummary(sessionId: string, firstMessage: string): SessionSummaryWire {
-  const now = new Date().toISOString();
-  return {
-    id: sessionId,
-    title: firstMessage.slice(0, 60) || "New chat",
-    preview: firstMessage,
-    createdAt: now,
-    updatedAt: now,
-    messageCount: 1,
-    status: "persisted",
-  };
-}
-
-function sendTo(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {
-  try { ws.send(JSON.stringify(msg)); } catch { /* closed */ }
-}
-
-function forwardNative(send: (m: WsServerMessage) => void, ev: NormalizedEvent, runId: string, fallbackSessionId: string): void {
-  const sessionId = ev.sessionId || fallbackSessionId;
-  switch (ev.type) {
-    case "text_delta":
-      send({ type: "run.delta", sessionId, runId, text: ev.text });
-      break;
-    case "thinking_delta":
-      send({ type: "run.thinking", sessionId, runId, text: ev.thinking });
-      break;
-    case "tool_start":
-      send({ type: "run.tool", sessionId, runId, tool: { phase: "start", id: ev.id, name: ev.name, input: ev.input } });
-      break;
-    case "tool_result":
-      send({ type: "run.tool", sessionId, runId, tool: { phase: ev.isError ? "error" : "end", id: ev.id, output: ev.output, isError: ev.isError } });
-      break;
-    case "error":
-      send({ type: "run.error", sessionId, runId, message: ev.message });
-      break;
-    case "status":
-    case "turn_done":
-      break;
-  }
+export async function cancelUserTurn(services: ServiceContainer, sessionId: string): Promise<void> {
+  await services.agentRuntimeManager.cancel(sessionId);
 }

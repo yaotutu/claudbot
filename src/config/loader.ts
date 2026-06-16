@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { RuntimeConfigSchema, type RuntimeConfig, type RuntimeConfigInput } from "./schema.ts";
-import { expandPath, readJson } from "../utils/fs.ts";
+import { expandPath, readJson, writeJsonAtomic } from "../utils/fs.ts";
 
 export type { RuntimeConfig } from "./schema.ts";
 
@@ -17,6 +17,7 @@ type ResolveEnv = {
 export type ConfigSource =
   | { kind: "env"; path: string } // CLAUDEBOT_CONFIG pointed at a file
   | { kind: "home"; path: string } // auto-discovered <home>/config.json
+  | { kind: "created"; path: string } // no config existed; a starter file was created
   | { kind: "defaults" }; // no file found, schema defaults
 
 export type LoadedConfig = {
@@ -54,6 +55,63 @@ function resolveHome(homeEnv: string | undefined): string {
   return expandPath(homeEnv && homeEnv.length > 0 ? homeEnv : defaultHome());
 }
 
+function starterConfig(home: string): RuntimeConfigInput {
+  return {
+    home,
+    workspace: { path: join(home, "workspace") },
+    gateway: { host: "127.0.0.1", port: 18790 },
+    claudeCode: {
+      baseUrl: "",
+      apiKey: "",
+      model: "sonnet",
+      providerModel: "",
+      permissionMode: "bypassPermissions",
+      maxTurns: 200,
+    },
+    channels: {
+      webui: { enabled: true },
+      telegram: {
+        enabled: false,
+        mode: "webhook",
+        botToken: "",
+        webhookPath: "/channels/telegram/webhook",
+        secretToken: "",
+        allowedChatIds: [],
+      },
+      feishu: {
+        enabled: false,
+        appId: "",
+        appSecret: "",
+        verificationToken: "",
+        encryptKey: "",
+        webhookPath: "/channels/feishu/events",
+        allowedChatIds: [],
+      },
+      qq: {
+        enabled: false,
+        appId: "",
+        clientSecret: "",
+        sessionDir: "",
+        typingKeepAlive: true,
+        parseFaceEmoji: true,
+        allowedConversationIds: [],
+        allowedUserIds: [],
+        allowedGroupOpenids: [],
+      },
+    },
+    tools: { permissions: { default: "allow", overrides: {} } },
+    mcp: { strict: true, servers: {} },
+    scheduler: { tickIntervalMs: 30_000 },
+  };
+}
+
+async function createStarterConfig(path: string, home: string): Promise<LoadedConfig> {
+  const data = starterConfig(home);
+  await writeJsonAtomic(path, data);
+  const config = resolveRuntimeConfig(data, { homeEnv: home });
+  return { config, source: { kind: "created", path } };
+}
+
 /**
  * Load runtime config with sensible defaults.
  *
@@ -77,9 +135,14 @@ export async function loadConfig(opts: {
     const expanded = expandPath(envPath);
     const file = Bun.file(expanded);
     if (!(await file.exists())) {
-      console.warn(`[claudebot] CLAUDEBOT_CONFIG=${envPath} points to a missing file. Falling back to schema defaults.`);
-      const config = resolveRuntimeConfig({}, { homeEnv: home });
-      return { config, source: { kind: "defaults" } };
+      console.warn(`[claudebot] CLAUDEBOT_CONFIG=${envPath} points to a missing file. Creating a starter config there.`);
+      try {
+        return await createStarterConfig(expanded, home);
+      } catch (err) {
+        console.warn(`[claudebot] failed to create starter config at ${expanded}: ${err instanceof Error ? err.message : String(err)}. Falling back to schema defaults.`);
+        const config = resolveRuntimeConfig({}, { homeEnv: home });
+        return { config, source: { kind: "defaults" } };
+      }
     }
     const data = await readJson<RuntimeConfigInput>(expanded, {});
     const config = resolveRuntimeConfig(data, { homeEnv: home });
@@ -98,12 +161,19 @@ export async function loadConfig(opts: {
       // Invalid JSON in the auto-discovered file is a common footgun — fall
       // through to defaults and warn so the user notices.
       console.warn(`[claudebot] failed to parse ${candidatePath}: ${err instanceof Error ? err.message : String(err)}. Falling back to schema defaults.`);
+      const config = resolveRuntimeConfig({}, { homeEnv: home });
+      return { config, source: { kind: "defaults" } };
     }
   }
 
-  // 3. No file → schema defaults.
-  const config = resolveRuntimeConfig({}, { homeEnv: home });
-  return { config, source: { kind: "defaults" } };
+  // 3. No file → create a starter config, then use it for this run.
+  try {
+    return await createStarterConfig(candidatePath, home);
+  } catch (err) {
+    console.warn(`[claudebot] failed to create starter config at ${candidatePath}: ${err instanceof Error ? err.message : String(err)}. Falling back to schema defaults.`);
+    const config = resolveRuntimeConfig({}, { homeEnv: home });
+    return { config, source: { kind: "defaults" } };
+  }
 }
 
 /**
@@ -115,7 +185,9 @@ export function formatConfigSource(source: ConfigSource): string {
       return `${source.path} (via CLAUDEBOT_CONFIG)`;
     case "home":
       return `${source.path} (auto-discovered)`;
+    case "created":
+      return `${source.path} (created from defaults; edit this file)`;
     case "defaults":
-      return "schema defaults (no config file found)";
+      return "schema defaults (no usable config file)";
   }
 }
