@@ -28,6 +28,12 @@ describe("runtime config", () => {
 
   test("channels default to webui enabled and external channels disabled", () => {
     const config = resolveRuntimeConfig({}, { homeEnv: "", configDir: "/tmp/cfg" });
+    expect(config.channels).toMatchObject({
+      sendProgress: true,
+      sendToolHints: false,
+      showReasoning: true,
+      sendMaxRetries: 3,
+    });
     expect(config.channels.webui.enabled).toBe(true);
     expect(config.channels.telegram).toMatchObject({
       enabled: false,
@@ -35,7 +41,8 @@ describe("runtime config", () => {
       botToken: "",
       webhookPath: "/channels/telegram/webhook",
       secretToken: "",
-      allowedChatIds: [],
+      allowFrom: [],
+      streaming: false,
     });
     expect(config.channels.feishu).toMatchObject({
       enabled: false,
@@ -44,7 +51,8 @@ describe("runtime config", () => {
       verificationToken: "",
       encryptKey: "",
       webhookPath: "/channels/feishu/events",
-      allowedChatIds: [],
+      allowFrom: [],
+      streaming: false,
     });
     expect(config.channels.qq).toMatchObject({
       enabled: false,
@@ -53,9 +61,8 @@ describe("runtime config", () => {
       sessionDir: "",
       typingKeepAlive: true,
       parseFaceEmoji: true,
-      allowedConversationIds: [],
-      allowedUserIds: [],
-      allowedGroupOpenids: [],
+      allowFrom: [],
+      streaming: false,
     });
   });
 
@@ -69,7 +76,8 @@ describe("runtime config", () => {
           botToken: "tg-token",
           webhookPath: "/tg",
           secretToken: "tg-secret",
-          allowedChatIds: ["123"],
+          allowFrom: ["123"],
+          streaming: true,
         },
         feishu: {
           enabled: true,
@@ -78,7 +86,8 @@ describe("runtime config", () => {
           verificationToken: "verify",
           encryptKey: "encrypt",
           webhookPath: "/fs",
-          allowedChatIds: ["chat-a"],
+          allowFrom: ["chat-a"],
+          streaming: true,
         },
         qq: {
           enabled: true,
@@ -87,16 +96,21 @@ describe("runtime config", () => {
           sessionDir: "/tmp/qq-session",
           typingKeepAlive: false,
           parseFaceEmoji: false,
-          allowedConversationIds: ["c2c:user-a"],
-          allowedUserIds: ["user-a"],
-          allowedGroupOpenids: ["group-a"],
+          allowFrom: ["c2c:user-a", "user-a", "group-a"],
+          streaming: true,
         },
       },
     }, { homeEnv: "", configDir: "/tmp/cfg" });
 
     expect(config.channels.webui.enabled).toBe(false);
-    expect(config.channels.telegram).toMatchObject({ enabled: true, mode: "polling", botToken: "tg-token", allowedChatIds: ["123"] });
-    expect(config.channels.feishu).toMatchObject({ enabled: true, appId: "app-id", allowedChatIds: ["chat-a"] });
+    expect(config.channels.telegram).toMatchObject({
+      enabled: true,
+      mode: "polling",
+      botToken: "tg-token",
+      allowFrom: ["123"],
+      streaming: true,
+    });
+    expect(config.channels.feishu).toMatchObject({ enabled: true, appId: "app-id", allowFrom: ["chat-a"], streaming: true });
     expect(config.channels.qq).toMatchObject({
       enabled: true,
       appId: "qq-app",
@@ -104,9 +118,62 @@ describe("runtime config", () => {
       sessionDir: "/tmp/qq-session",
       typingKeepAlive: false,
       parseFaceEmoji: false,
-      allowedConversationIds: ["c2c:user-a"],
-      allowedUserIds: ["user-a"],
-      allowedGroupOpenids: ["group-a"],
+      allowFrom: ["c2c:user-a", "user-a", "group-a"],
+      streaming: true,
+    });
+  });
+
+  test("accepts Nanobot-style snake_case channel aliases", () => {
+    const config = resolveRuntimeConfig({
+      channels: {
+        send_progress: false,
+        send_tool_hints: true,
+        show_reasoning: false,
+        send_max_retries: 5,
+        telegram: {
+          enabled: true,
+          bot_token: "tg-token",
+          webhook_path: "/tg-alias",
+          secret_token: "tg-secret",
+          allow_from: ["123"],
+          streaming: true,
+        },
+        qq: {
+          enabled: true,
+          app_id: "qq-app",
+          client_secret: "qq-secret",
+          session_dir: "/tmp/qq",
+          typing_keep_alive: false,
+          parse_face_emoji: false,
+          allow_from: ["c2c:user-a"],
+          streaming: true,
+        },
+      },
+    } as never, { homeEnv: "", configDir: "/tmp/cfg" });
+
+    expect(config.channels).toMatchObject({
+      sendProgress: false,
+      sendToolHints: true,
+      showReasoning: false,
+      sendMaxRetries: 5,
+    });
+    expect(config.channels.telegram).toMatchObject({
+      enabled: true,
+      botToken: "tg-token",
+      webhookPath: "/tg-alias",
+      secretToken: "tg-secret",
+      allowFrom: ["123"],
+      streaming: true,
+    });
+    expect(config.channels.qq).toMatchObject({
+      enabled: true,
+      appId: "qq-app",
+      clientSecret: "qq-secret",
+      sessionDir: "/tmp/qq",
+      typingKeepAlive: false,
+      parseFaceEmoji: false,
+      allowFrom: ["c2c:user-a"],
+      streaming: true,
     });
   });
 

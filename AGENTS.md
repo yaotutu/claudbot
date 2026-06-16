@@ -9,6 +9,7 @@
 ## 模块 README 索引
 
 - `src/channels/README.md`: 外部聊天渠道协议、adapter 生命周期、运行时分发和平台实现边界。
+- `src/config/README.md`: 运行时配置 schema、加载顺序、路径派生和 channel 配置 alias 规则。
 
 ## 当前架构边界
 
