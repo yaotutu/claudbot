@@ -70,7 +70,7 @@ describe("channel runtime", () => {
     expect(binding).toMatchObject({ channel: "telegram", externalConversationId: "chat-1", externalUserId: "user-1" });
   });
 
-  test("resumes through an existing channel binding", async () => {
+  test("continues through an existing channel binding", async () => {
     const factory = makeQueuedQueryFactory([
       [fixture("01-init"), fixture("05-text-assistant"), fixture("07-result-success")],
       [fixture("05-text-assistant"), fixture("07-result-success")],
@@ -99,7 +99,7 @@ describe("channel runtime", () => {
 
     expect(factory.calls).toEqual([
       { prompt: "first turn", resumeSessionId: undefined },
-      { prompt: "resume me", resumeSessionId: first.sessionId },
+      { prompt: "resume me", resumeSessionId: undefined },
     ]);
     expect(result.sessionId).toBe(first.sessionId);
     expect(result.outbound.conversationId).toBe("chat-2");

@@ -17,41 +17,50 @@ export async function runUserTurn(
   await sink.send({ type: "run.started", sessionId: initialRouteId, runId });
 
   const sdkSessionId = await resolveResumeSessionId(services, input);
-  const runner = services.makeRunner(input.source === "schedule" ? "schedule_turn" : "user_turn", sdkSessionId ?? "pending");
+  const runtimeSessionId = sdkSessionId ?? input.sessionId ?? input.draftId ?? `pending-${runId}`;
   let lastSessionId: string | undefined = sdkSessionId;
   let collected = "";
   let turnErrored = false;
   let finalResult = "";
   let sessionCreated = false;
 
-  try {
-    for await (const ev of runner.run({ prompt: input.content, resumeSessionId: sdkSessionId })) {
-      if (ev.type === "error" && ev.message.includes("mirror_error")) {
-        await sink.send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
-        continue;
-      }
-      if (ev.sessionId && ev.sessionId !== lastSessionId) {
-        lastSessionId = ev.sessionId;
-      }
-      if (!sdkSessionId && !sessionCreated && lastSessionId && lastSessionId !== "pending") {
-        sessionCreated = true;
-        await sink.send({
-          type: "session.created",
-          draftId: input.draftId,
-          session: draftSessionSummary(lastSessionId, input.content),
-        });
-      }
-      await forwardNative((event) => sink.send(event), ev, runId, lastSessionId ?? initialRouteId);
-      if (ev.type === "text_delta") collected += ev.text;
-      if (ev.type === "turn_done") {
-        finalResult = ev.result;
-        if (ev.sessionId) lastSessionId = ev.sessionId;
-      }
-      if (ev.type === "error") {
-        turnErrored = true;
-        finalResult = `[error] ${ev.message}`;
-      }
+  const handleEvent = async (ev: NormalizedEvent) => {
+    if (ev.type === "error" && ev.message.includes("mirror_error")) {
+      await sink.send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
+      return;
     }
+    if (ev.sessionId && ev.sessionId !== lastSessionId) {
+      lastSessionId = ev.sessionId;
+    }
+    if (!sdkSessionId && !sessionCreated && lastSessionId && lastSessionId !== "pending") {
+      sessionCreated = true;
+      await sink.send({
+        type: "session.created",
+        draftId: input.draftId,
+        session: draftSessionSummary(lastSessionId, input.content),
+      });
+      if (runtimeSessionId !== lastSessionId) services.agentRuntimeManager.remapSession(runtimeSessionId, lastSessionId);
+    }
+    await forwardNative((event) => sink.send(event), ev, runId, lastSessionId ?? initialRouteId);
+    if (ev.type === "text_delta") collected += ev.text;
+    if (ev.type === "turn_done") {
+      finalResult = ev.result;
+      if (ev.sessionId) lastSessionId = ev.sessionId;
+    }
+    if (ev.type === "error") {
+      turnErrored = true;
+      finalResult = `[error] ${ev.message}`;
+    }
+  };
+
+  try {
+    await services.agentRuntimeManager.runTurn({
+      sessionId: runtimeSessionId,
+      content: input.content,
+      runId,
+      resumeSessionId: sdkSessionId,
+      onEvent: handleEvent,
+    });
   } catch (err) {
     turnErrored = true;
     finalResult = `[error] ${err instanceof Error ? err.message : String(err)}`;
@@ -138,6 +147,8 @@ async function forwardNative(
       await send({ type: "run.error", sessionId, runId, message: ev.message });
       break;
     case "status":
+      await send({ type: "run.status", sessionId, runId, status: ev.status, mcpServers: ev.mcpServers });
+      break;
     case "turn_done":
       break;
   }

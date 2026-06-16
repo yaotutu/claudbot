@@ -128,6 +128,38 @@ const ChannelsSchema = z.object({
   },
 });
 
+const McpServerNameSchema = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/).refine((name) => name !== "claudebot", {
+  message: "external MCP server name 'claudebot' is reserved for native tools",
+});
+
+const McpBaseSchema = z.object({
+  timeout: z.number().int().min(1000).optional(),
+  alwaysLoad: z.boolean().optional(),
+});
+
+const McpStdioServerSchema = McpBaseSchema.extend({
+  type: z.literal("stdio"),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+});
+
+const McpRemoteServerSchema = McpBaseSchema.extend({
+  type: z.enum(["sse", "http"]),
+  url: z.string().url(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+const McpServerSchema = z.discriminatedUnion("type", [
+  McpStdioServerSchema,
+  McpRemoteServerSchema,
+]);
+
+const McpSchema = z.object({
+  strict: z.boolean().default(true),
+  servers: z.record(McpServerNameSchema, McpServerSchema).default({}),
+}).default({ strict: true, servers: {} });
+
 export const RuntimeConfigSchema = z.object({
   home: z.string().optional(),
   workspace: z.object({ path: z.string().optional() }).default({ path: undefined }),
@@ -141,6 +173,7 @@ export const RuntimeConfigSchema = z.object({
   }),
   channels: ChannelsSchema,
   tools: ToolsSchema.default({ permissions: { default: "allow", overrides: {} } }),
+  mcp: McpSchema,
   scheduler: SchedulerSchema,
 });
 
