@@ -5,6 +5,7 @@ import {
   deleteSchedule,
   fetchBootstrap,
   fetchRuntime,
+  fetchMemoryStatus,
   fetchNotifications,
   fetchMcpConfig,
   fetchScheduleRuns,
@@ -14,6 +15,7 @@ import {
   listSessions,
   markNotificationsRead,
   reconnectMcpServer,
+  runMemoryDream,
   runScheduleNow,
   updateSchedule,
 } from "@/lib/claudebot-api";
@@ -129,6 +131,7 @@ describe("claudebot native API client", () => {
     expect(runtime.providerModel).toBe("glm-4.7");
   });
 
+  reconnectMcpServer,
   it("reads MCP configuration, session status, and reconnects configured servers", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -187,6 +190,28 @@ describe("claudebot native API client", () => {
       { method: "GET", url: "/api/sessions/s1/mcp" },
       { method: "POST", url: "/api/sessions/s1/mcp/filesystem/reconnect" },
     ]);
+  });
+  it("fetches memory status and runs dream", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === "/api/memory/status") {
+        return jsonResponse({
+          home: "/tmp/home/memory",
+          longTermFile: "/tmp/home/memory/MEMORY.md",
+          exists: true,
+          sizeBytes: 42,
+          lastDreamAt: null,
+          pendingCandidates: 1,
+          gitAudit: { available: true, latestCommit: null },
+        });
+      }
+      if (String(url) === "/api/memory/dream" && init?.method === "POST") {
+        return jsonResponse({ dryRun: true, applied: 0, summary: "No pending candidates" });
+      }
+      throw new Error(`unexpected ${String(url)}`);
+    }));
+
+    expect((await fetchMemoryStatus()).longTermFile).toContain("MEMORY.md");
+    expect((await runMemoryDream({ dryRun: true })).summary).toBe("No pending candidates");
   });
 
   it("fetchThreadMessages reads native thread messages", async () => {

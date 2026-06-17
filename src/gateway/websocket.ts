@@ -5,6 +5,8 @@ import type { ServiceContainer } from "../runtime/services.ts";
 import type { WsClientMessage, WsServerMessage } from "./protocol.ts";
 import { runUserTurn } from "../conversation/run-user-turn.ts";
 
+export { maybeRunExplicitMemoryDreamAfterTurn } from "../conversation/run-user-turn.ts";
+
 export type WsData = {
   sessionId: string;
   services: ServiceContainer;
@@ -81,8 +83,6 @@ async function handleClientMessage(
   }
 }
 
-
 export async function cancelUserTurn(services: ServiceContainer, sessionId: string): Promise<void> {
   await services.agentRuntimeManager.cancel(sessionId);
 }
-

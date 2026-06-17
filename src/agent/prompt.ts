@@ -14,6 +14,8 @@ export type PromptInputs = {
   scheduleRunId?: string;
   userFile: string;
   soulFile: string;
+  longTermMemoryFile?: string;
+  longTermMemoryMaxChars?: number;
   toolPrompts?: ToolPrompt[];
   now?: Date;
 };
@@ -22,6 +24,8 @@ export async function buildSystemPrompt(inputs: PromptInputs): Promise<string> {
   const now = inputs.now ?? new Date();
   const userContent = await safeRead(inputs.userFile);
   const soulContent = await safeRead(inputs.soulFile);
+  const memoryContent = inputs.longTermMemoryFile ? await safeRead(inputs.longTermMemoryFile) : "";
+  const memoryMaxChars = inputs.longTermMemoryMaxChars ?? 24_000;
 
   const parts: string[] = [];
   parts.push(`# Claudebot runtime context`);
@@ -47,6 +51,17 @@ export async function buildSystemPrompt(inputs: PromptInputs): Promise<string> {
     parts.push("");
     parts.push(`# Soul (soul.md)`);
     parts.push(soulContent);
+  }
+
+  if (memoryContent) {
+    parts.push("");
+    parts.push(`# Long-term memory (memory/MEMORY.md)`);
+    if (memoryContent.length > memoryMaxChars) {
+      parts.push(memoryContent.slice(0, memoryMaxChars));
+      parts.push(`\n[Long-term memory was truncated to ${memoryMaxChars} characters. Use memory_read or memory_search for full context.]`);
+    } else {
+      parts.push(memoryContent);
+    }
   }
 
   return parts.join("\n");

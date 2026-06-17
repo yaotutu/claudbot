@@ -1,5 +1,7 @@
 import type {
   CreateSchedulePayload,
+  MemoryDreamResult,
+  MemoryStatus,
   NotificationRecord,
   RuntimeInfo,
   ScheduleRecord,
@@ -61,6 +63,18 @@ export async function fetchSessionMcpStatus(sessionId: string, base = ""): Promi
 
 export async function reconnectMcpServer(sessionId: string, serverName: string, base = ""): Promise<WebuiMcpSessionStatus> {
   return request<WebuiMcpSessionStatus>(`${base}/api/sessions/${encodeURIComponent(sessionId)}/mcp/${encodeURIComponent(serverName)}/reconnect`, { method: "POST" });
+}
+
+export async function fetchMemoryStatus(base = ""): Promise<MemoryStatus> {
+  return request<MemoryStatus>(`${base}/api/memory/status`);
+}
+
+export async function runMemoryDream(input: { dryRun?: boolean } = {}, base = ""): Promise<MemoryDreamResult> {
+  return request<MemoryDreamResult>(`${base}/api/memory/dream`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export async function listSessions(base = ""): Promise<SessionSummary[]> {

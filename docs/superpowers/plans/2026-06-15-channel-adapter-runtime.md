@@ -114,4 +114,3 @@ Run: `cd webui && bun run test && bun run build && bun run lint`.
 - [ ] **Step 3: CDP click verification**
 
 Start the app and verify existing WebUI still works: page load, Settings/Search/Skills feedback, New chat draft, send a short message, remap/error state. This refactor should not change visible Web behavior.
-

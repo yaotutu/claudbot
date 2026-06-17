@@ -9,6 +9,8 @@ import type {
 } from "../shared/webui-protocol.ts";
 import { appendSessionJsonlEntry } from "../sessions/jsonl-store.ts";
 import type { ConversationEvent, ConversationSink, RunUserTurnInput, RunUserTurnResult } from "./types.ts";
+import { runMemoryDream } from "../memory/dream.ts";
+import { detectMemoryIntent } from "../memory/intent.ts";
 
 // SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
 // long so the SDK JSONL mirror has a chance to flush before consumers read it.
@@ -108,6 +110,7 @@ export async function runUserTurn(
       timestamp: new Date().toISOString(),
     });
   }
+  await maybeRunExplicitMemoryDreamAfterTurn(services, input.content, activeSdkId, turnErrored);
   await sink.send({ type: "run.completed", sessionId: activeSdkId, runId, isError: turnErrored, result: finalResult });
   await sink.send({
     type: "message.appended",
@@ -126,6 +129,22 @@ export async function runUserTurn(
   });
 
   return { sessionId: lastSessionId ?? sdkSessionId ?? null, runId, result: finalResult, isError: turnErrored };
+}
+
+export async function maybeRunExplicitMemoryDreamAfterTurn(
+  services: ServiceContainer,
+  content: string,
+  sessionId: string | undefined,
+  turnErrored: boolean,
+): Promise<void> {
+  if (turnErrored || !sessionId || sessionId === "pending") return;
+  const intent = detectMemoryIntent(content);
+  if (intent.type !== "explicit") return;
+  try {
+    await runMemoryDream(services.memoryPaths, { dryRun: false, sessionId, includeEventCandidates: false });
+  } catch (err) {
+    console.error("[memory] explicit dream failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 function collectRunActivity(

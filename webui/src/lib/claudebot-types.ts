@@ -4,6 +4,8 @@ export type {
   CreateSchedulePayload,
   DeliveryChannel,
   DraftSession,
+  MemoryDreamResult,
+  MemoryStatus,
   NotificationRecord,
   RuntimeMcpServerStatus,
   RuntimeInfo,

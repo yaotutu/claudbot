@@ -12,6 +12,33 @@ export type RuntimeInfo = {
   permissionMode: string;
 };
 
+export type MemoryCommitSummary = {
+  sha: string;
+  message: string;
+  createdAt: string;
+};
+
+export type MemoryStatus = {
+  home: string;
+  longTermFile: string;
+  exists: boolean;
+  sizeBytes: number;
+  lastDreamAt: string | null;
+  pendingCandidates: number;
+  gitAudit: {
+    available: boolean;
+    reason?: string;
+    latestCommit?: MemoryCommitSummary | null;
+  };
+};
+
+export type MemoryDreamResult = {
+  dryRun: boolean;
+  applied: number;
+  summary: string;
+  commit?: string;
+};
+
 export type SessionSummary = {
   id: string;
   title: string;

@@ -189,7 +189,9 @@ describe("runtime config", () => {
     expect(paths.userFile).toBe("/tmp/bot/profile/user.md");
     expect(paths.soulFile).toBe("/tmp/bot/profile/soul.md");
     expect(paths.memoryDir).toBe("/tmp/bot/memory");
-    expect(paths.memoryFile).toBe("/tmp/bot/memory/memory.json");
+    expect(paths.longTermMemoryFile).toBe("/tmp/bot/memory/MEMORY.md");
+    expect(paths.memoryEventsFile).toBe("/tmp/bot/memory/memory_events.jsonl");
+    expect(paths.deprecatedMemoryJsonFile).toBe("/tmp/bot/memory/memory.json");
     expect(paths.schedulesDir).toBe("/tmp/bot/schedules");
     expect(paths.schedulesFile).toBe("/tmp/bot/schedules/jobs.json");
     expect(paths.scheduleRunsDir).toBe("/tmp/bot/schedules/runs");
