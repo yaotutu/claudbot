@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ServerFrame, ThreadMessage } from "@/lib/claudebot-types";
+import type {
+  RuntimeMcpServerStatus,
+  ServerFrame,
+  ThreadActivity,
+  ThreadActivityStatus,
+  ThreadMessage,
+  ToolFrame,
+} from "@/lib/claudebot-types";
 
 type FrameClient = {
   onFrame: (handler: (frame: ServerFrame) => void) => () => void;
   onStatus?: (handler: (status: string) => void) => () => void;
   sendMessage: (input: { sessionId?: string; draftId?: string; content: string }) => void;
+  cancel?: (sessionId: string) => void;
 };
 
 export type UseClaudebotThreadOptions = {
@@ -17,11 +25,22 @@ export type UseClaudebotThreadOptions = {
 
 export function useClaudebotThread(options: UseClaudebotThreadOptions) {
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
+  const [activities, setActivities] = useState<ThreadActivity[]>([]);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const effectiveSessionIdRef = useRef(options.sessionId);
   const activeAssistantIdRef = useRef<string | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+  const runActivitiesRef = useRef<Record<string, ThreadActivity[]>>({});
   const remappedSessionIdRef = useRef<string | null>(null);
+
+  const updateRunActivities = useCallback((runId: string, update: (current: ThreadActivity[]) => ThreadActivity[]) => {
+    const next = update(runActivitiesRef.current[runId] ?? []);
+    runActivitiesRef.current = { ...runActivitiesRef.current, [runId]: next };
+    if (activeRunIdRef.current === runId) setActivities(next);
+    return next;
+  }, []);
 
   useEffect(() => {
     const previousSessionId = effectiveSessionIdRef.current;
@@ -30,10 +49,17 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
     effectiveSessionIdRef.current = options.sessionId;
     if (!isRemappedSession) {
       activeAssistantIdRef.current = null;
+      activeRunIdRef.current = null;
+      runActivitiesRef.current = {};
       setStreaming(false);
+      setActivities([]);
+      setRunStatus(null);
     }
     if (!options.sessionId) {
+      runActivitiesRef.current = {};
       setMessages([]);
+      setActivities([]);
+      setRunStatus(null);
       setLoading(false);
       return;
     }
@@ -43,7 +69,10 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
       return;
     }
     if (options.sessionStatus !== "persisted") {
+      runActivitiesRef.current = {};
       setMessages([]);
+      setActivities([]);
+      setRunStatus(null);
       setLoading(false);
       return;
     }
@@ -72,11 +101,43 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
       }
       if (frame.type === "run.started" && frame.sessionId === effectiveSessionIdRef.current) {
         setStreaming(true);
+        setRunStatus("Working...");
+        setActivities([]);
+        runActivitiesRef.current = { ...runActivitiesRef.current, [frame.runId]: [] };
+        activeRunIdRef.current = frame.runId;
         activeAssistantIdRef.current = `assistant-${frame.runId}`;
+        return;
+      }
+      if (frame.type === "run.thinking" && frame.sessionId === effectiveSessionIdRef.current) {
+        setStreaming(true);
+        activeRunIdRef.current = frame.runId;
+        setRunStatus("Thinking...");
+        updateRunActivities(frame.runId, (current) => appendThinkingActivity(current, frame.runId, frame.text));
+        return;
+      }
+      if (frame.type === "run.tool" && frame.sessionId === effectiveSessionIdRef.current) {
+        setStreaming(true);
+        activeRunIdRef.current = frame.runId;
+        setRunStatus(toolStatusLabel(frame.tool));
+        updateRunActivities(frame.runId, (current) => upsertToolActivity(current, frame.runId, frame.tool));
+        return;
+      }
+      if (frame.type === "run.status" && frame.sessionId === effectiveSessionIdRef.current) {
+        setRunStatus(frame.status);
+        if (!frame.runId) return;
+        const runId = frame.runId;
+        activeRunIdRef.current = runId;
+        updateRunActivities(runId, (current) => upsertStatusActivity(current, {
+          runId,
+          text: frame.status,
+          status: "running",
+          mcpServers: frame.mcpServers,
+        }));
         return;
       }
       if (frame.type === "run.delta" && frame.sessionId === effectiveSessionIdRef.current) {
         setStreaming(true);
+        activeRunIdRef.current = frame.runId;
         const assistantId = activeAssistantIdRef.current ?? `assistant-${frame.runId}`;
         activeAssistantIdRef.current = assistantId;
         setMessages((current) => appendAssistantDelta(current, assistantId, frame.text));
@@ -85,34 +146,69 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
       if (frame.type === "message.appended" && frame.sessionId === effectiveSessionIdRef.current) {
         const streamingAssistantId = activeAssistantIdRef.current;
         setMessages((current) => appendOrReplaceFinalMessage(current, frame.message, streamingAssistantId));
-        activeAssistantIdRef.current = null;
+        if (frame.message.role !== "user") {
+          setStreaming(false);
+          setRunStatus(null);
+          setActivities([]);
+          activeAssistantIdRef.current = null;
+          activeRunIdRef.current = null;
+        }
         return;
       }
       if (frame.type === "run.completed" && frame.sessionId === effectiveSessionIdRef.current) {
+        updateRunActivities(
+          frame.runId,
+          (current) => finalizedRunActivities(current, frame.isError ? "error" : "complete"),
+        );
         setStreaming(false);
+        setRunStatus(null);
+        setActivities([]);
+        activeRunIdRef.current = null;
       }
       if (frame.type === "run.error" && frame.sessionId === effectiveSessionIdRef.current) {
+        const runId = frame.runId ?? activeRunIdRef.current;
+        const errorActivities = runId ? updateRunActivities(
+          runId,
+          (current) => finalizedRunActivities(current, "error"),
+        ) : [];
         setStreaming(false);
+        setRunStatus(null);
         activeAssistantIdRef.current = null;
+        activeRunIdRef.current = null;
+        setActivities([]);
         setMessages((current) => [...current, {
           id: `error-${frame.runId ?? crypto.randomUUID()}`,
           role: "system",
           content: frame.message,
           createdAt: new Date().toISOString(),
-          metadata: { error: true, ...(frame.runId ? { runId: frame.runId } : {}) },
+          metadata: { error: true, ...(runId ? { runId, activities: errorActivities } : {}) },
         }]);
       }
     });
-  }, [options.client]);
+  }, [options.client, updateRunActivities]);
 
   useEffect(() => {
     if (!options.client.onStatus) return;
     return options.client.onStatus((status) => {
       if (status === "closed" || status === "error") {
         setStreaming(false);
+        setRunStatus(null);
+        setActivities([]);
         activeAssistantIdRef.current = null;
+        activeRunIdRef.current = null;
       }
     });
+  }, [options.client]);
+
+  const cancel = useCallback(() => {
+    const sessionId = effectiveSessionIdRef.current;
+    if (!sessionId) return;
+    options.client.cancel?.(sessionId);
+    setStreaming(false);
+    setRunStatus(null);
+    setActivities([]);
+    activeAssistantIdRef.current = null;
+    activeRunIdRef.current = null;
   }, [options.client]);
 
   const send = useCallback((content: string) => {
@@ -127,7 +223,137 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
     }
   }, [options.client, options.sessionId, options.sessionStatus]);
 
-  return { messages, loading, streaming, send };
+  return { messages, activities, runStatus, loading, streaming, send, cancel };
+}
+
+function finalizedRunActivities(
+  activities: ThreadActivity[],
+  status: Extract<ThreadActivityStatus, "complete" | "error">,
+): ThreadActivity[] {
+  const timestamp = nowIso();
+  return activities.map((activity) => activity.status === "running"
+    ? { ...activity, status, updatedAt: timestamp }
+    : activity);
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function appendThinkingActivity(
+  activities: ThreadActivity[],
+  runId: string,
+  text: string,
+): ThreadActivity[] {
+  const id = `thinking-${runId}`;
+  const timestamp = nowIso();
+  const index = activities.findIndex((activity) => activity.id === id);
+  if (index === -1) {
+    return [...activities, {
+      id,
+      kind: "thinking",
+      runId,
+      text,
+      status: "running",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }
+  const next = activities.slice();
+  const current = next[index];
+  if (current.kind !== "thinking") return activities;
+  next[index] = {
+    ...current,
+    text: `${current.text}${text}`,
+    status: "running",
+    updatedAt: timestamp,
+  };
+  return next;
+}
+
+function upsertToolActivity(
+  activities: ThreadActivity[],
+  runId: string,
+  tool: ToolFrame,
+): ThreadActivity[] {
+  const id = `tool-${tool.id}`;
+  const timestamp = nowIso();
+  const status = tool.phase === "error" || tool.isError ? "error" : tool.phase === "end" ? "complete" : "running";
+  const index = activities.findIndex((activity) => activity.id === id);
+  if (index === -1) {
+    return [...activities, {
+      id,
+      kind: "tool",
+      runId,
+      toolId: tool.id,
+      name: tool.name?.trim() || "Tool",
+      phase: tool.phase,
+      input: tool.input,
+      output: tool.output,
+      isError: tool.isError,
+      status,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }
+  const next = activities.slice();
+  const current = next[index];
+  if (current.kind !== "tool") return activities;
+  next[index] = {
+    ...current,
+    name: tool.name?.trim() || current.name,
+    phase: tool.phase,
+    input: tool.input ?? current.input,
+    output: tool.output ?? current.output,
+    isError: tool.isError ?? current.isError,
+    status,
+    updatedAt: timestamp,
+  };
+  return next;
+}
+
+function upsertStatusActivity(
+  activities: ThreadActivity[],
+  input: {
+    runId: string;
+    text: string;
+    status: ThreadActivityStatus;
+    mcpServers?: RuntimeMcpServerStatus[];
+  },
+): ThreadActivity[] {
+  const id = `status-${input.runId ?? "global"}`;
+  const timestamp = nowIso();
+  const index = activities.findIndex((activity) => activity.id === id);
+  if (index === -1) {
+    return [...activities, {
+      id,
+      kind: "status",
+      runId: input.runId,
+      text: input.text,
+      status: input.status,
+      mcpServers: input.mcpServers,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }
+  const next = activities.slice();
+  const current = next[index];
+  if (current.kind !== "status") return activities;
+  next[index] = {
+    ...current,
+    text: input.text,
+    status: input.status,
+    mcpServers: input.mcpServers,
+    updatedAt: timestamp,
+  };
+  return next;
+}
+
+function toolStatusLabel(tool: ToolFrame): string {
+  const name = tool.name?.trim() || "tool";
+  if (tool.phase === "start") return `Running ${name}`;
+  if (tool.phase === "error" || tool.isError) return `${name} failed`;
+  return `${name} completed`;
 }
 
 function appendAssistantDelta(messages: ThreadMessage[], id: string, delta: string): ThreadMessage[] {

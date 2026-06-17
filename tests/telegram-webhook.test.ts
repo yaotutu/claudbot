@@ -49,7 +49,8 @@ describe("telegram webhook adapter", () => {
       botToken: "token",
       webhookPath: "/channels/telegram/webhook",
       secretToken: "expected",
-      allowedChatIds: [],
+      allowFrom: [],
+      streaming: false,
     }, { sendMessage: async () => {} });
 
     const res = await adapter.handleHttp?.(
@@ -70,7 +71,8 @@ describe("telegram webhook adapter", () => {
       botToken: "token",
       webhookPath: "/channels/telegram/webhook",
       secretToken: "secret",
-      allowedChatIds: ["2"],
+      allowFrom: ["2"],
+      streaming: false,
     }, { sendMessage: async (chatId, text) => { sent.push({ chatId, text }); } });
 
     const res = await adapter.handleHttp?.(
@@ -100,7 +102,8 @@ describe("telegram webhook adapter", () => {
       botToken: "token",
       webhookPath: "/channels/telegram/webhook",
       secretToken: "secret",
-      allowedChatIds: ["123"],
+      allowFrom: ["123"],
+      streaming: false,
     }, { sendMessage: async (chatId, text) => { sent.push({ chatId, text }); } });
 
     const res = await adapter.handleHttp?.(
@@ -114,8 +117,9 @@ describe("telegram webhook adapter", () => {
 
     expect(res?.status).toBe(200);
     expect(factory.calls).toEqual([{ prompt: "ping from telegram", resumeSessionId: undefined }]);
-    const binding = await services.channelBindings.find("telegram", "123");
+    const binding = await services.channelBindings.find("telegram", "telegram:123");
     expect(binding?.claudebotSessionId).toBeTruthy();
+    expect(binding?.externalChatId).toBe("telegram:123");
     expect(sent).toEqual([{ chatId: "123", text: expect.any(String) }]);
     expect(sent[0].text.length).toBeGreaterThan(0);
   });

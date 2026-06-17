@@ -102,19 +102,19 @@ export function TasksPanel({ client, notifications, onNotificationsChange, onRef
       {showCreateForm ? (
         <div className="grid gap-2 border-b border-border pb-3">
           <div className="grid grid-cols-2 gap-2">
-            <input className="rounded-md border border-border bg-background px-2 py-1" placeholder="Name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-            <select className="rounded-md border border-border bg-background px-2 py-1" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
+            <input id="task-name" name="taskName" aria-label="Name" className="rounded-md border border-border bg-background px-2 py-1" placeholder="Name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+            <select id="task-kind" name="taskKind" aria-label="Task kind" className="rounded-md border border-border bg-background px-2 py-1" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
               <option value="cron">cron</option>
               <option value="at">at</option>
               <option value="every">every</option>
             </select>
           </div>
-          <textarea className="min-h-16 resize-none rounded-md border border-border bg-background px-2 py-1" placeholder="Message" value={draft.message} onChange={(event) => setDraft({ ...draft, message: event.target.value })} />
+          <textarea id="task-message" name="taskMessage" aria-label="Message" className="min-h-16 resize-none rounded-md border border-border bg-background px-2 py-1" placeholder="Message" value={draft.message} onChange={(event) => setDraft({ ...draft, message: event.target.value })} />
           <div className="grid grid-cols-2 gap-2">
-            {draft.kind === "cron" ? <input className="rounded-md border border-border bg-background px-2 py-1" value={draft.cronExpr} onChange={(event) => setDraft({ ...draft, cronExpr: event.target.value })} /> : null}
-            {draft.kind === "at" ? <input className="rounded-md border border-border bg-background px-2 py-1" placeholder="ISO time" value={draft.at} onChange={(event) => setDraft({ ...draft, at: event.target.value })} /> : null}
-            {draft.kind === "every" ? <input className="rounded-md border border-border bg-background px-2 py-1" value={draft.everyMs} onChange={(event) => setDraft({ ...draft, everyMs: event.target.value })} /> : null}
-            <input className="rounded-md border border-border bg-background px-2 py-1" value={draft.timezone} onChange={(event) => setDraft({ ...draft, timezone: event.target.value })} />
+            {draft.kind === "cron" ? <input id="task-cron-expr" name="cronExpr" aria-label="Cron expression" className="rounded-md border border-border bg-background px-2 py-1" value={draft.cronExpr} onChange={(event) => setDraft({ ...draft, cronExpr: event.target.value })} /> : null}
+            {draft.kind === "at" ? <input id="task-at" name="at" aria-label="ISO time" className="rounded-md border border-border bg-background px-2 py-1" placeholder="ISO time" value={draft.at} onChange={(event) => setDraft({ ...draft, at: event.target.value })} /> : null}
+            {draft.kind === "every" ? <input id="task-every-ms" name="everyMs" aria-label="Interval milliseconds" className="rounded-md border border-border bg-background px-2 py-1" value={draft.everyMs} onChange={(event) => setDraft({ ...draft, everyMs: event.target.value })} /> : null}
+            <input id="task-timezone" name="timezone" aria-label="Timezone" className="rounded-md border border-border bg-background px-2 py-1" value={draft.timezone} onChange={(event) => setDraft({ ...draft, timezone: event.target.value })} />
           </div>
           <button className="w-fit rounded-md bg-foreground px-3 py-1.5 text-background disabled:opacity-50" disabled={busy || !draft.name.trim() || !draft.message.trim()} onClick={submit}>Create</button>
         </div>

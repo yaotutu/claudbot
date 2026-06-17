@@ -17,9 +17,8 @@ const qqConfig: QqConfig = {
   sessionDir: "",
   typingKeepAlive: true,
   parseFaceEmoji: true,
-  allowedConversationIds: [],
-  allowedUserIds: [],
-  allowedGroupOpenids: [],
+  allowFrom: [],
+  streaming: false,
 };
 
 const sdkSuccessEvents = () => [fixture("01-init"), fixture("05-text-assistant"), fixture("07-result-success")];
@@ -99,7 +98,8 @@ describe("qq adapter", () => {
     expect(factory.calls).toEqual([{ prompt: "hello qq", resumeSessionId: undefined }]);
     expect(client.replies.length).toBe(1);
     expect(client.proactive).toEqual([]);
-    const binding = await services.channelBindings.find("qq", "c2c:user-a");
+    const binding = await services.channelBindings.find("qq", "qq:c2c:user-a");
+    expect(binding?.externalChatId).toBe("qq:c2c:user-a");
     expect(binding?.externalUserId).toBe("user-a");
   });
 
@@ -107,7 +107,7 @@ describe("qq adapter", () => {
     const factory = makeRecordingQueryFactory([]);
     const { services } = await makeServices(factory);
     const client = makeFakeQqClient();
-    const adapter = createQqAdapter(services, { ...qqConfig, allowedConversationIds: ["c2c:allowed"] }, client);
+    const adapter = createQqAdapter(services, { ...qqConfig, allowFrom: ["c2c:allowed"] }, client);
     await adapter.start();
 
     await client.handler?.({
@@ -140,7 +140,8 @@ describe("qq adapter", () => {
 
     expect(client.replies.length).toBe(1);
     expect(client.proactive).toEqual([{ target: "group-a", content: client.replies[0].content, kind: "group" }]);
-    const binding = await services.channelBindings.find("qq", "group:group-a");
+    const binding = await services.channelBindings.find("qq", "qq:group:group-a");
+    expect(binding?.externalChatId).toBe("qq:group:group-a");
     expect(binding?.externalUserId).toBe("member-a");
   });
 });

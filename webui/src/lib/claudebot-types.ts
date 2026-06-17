@@ -7,6 +7,7 @@ export type {
   MemoryDreamResult,
   MemoryStatus,
   NotificationRecord,
+  RuntimeMcpServerStatus,
   RuntimeInfo,
   ScheduleKind,
   ScheduleRecord,
@@ -14,7 +15,10 @@ export type {
   ScheduleRunStartResult,
   ServerFrame,
   SessionSummary,
+  ThreadActivity,
+  ThreadActivityStatus,
   ThreadMessage,
+  ToolFrame,
   UpdateSchedulePayload,
   WebuiBootstrap,
 } from "../../../src/shared/webui-protocol.ts";

@@ -43,11 +43,11 @@ describe("gateway HTTP", () => {
 
     await services.channelBindings.upsert({
       channel: "telegram",
-      externalConversationId: "chat-1",
+      externalChatId: "telegram:chat-1",
       claudebotSessionId: "sess-1",
     });
 
-    expect(await services.channelBindings.find("telegram", "chat-1")).toMatchObject({
+    expect(await services.channelBindings.find("telegram", "telegram:chat-1")).toMatchObject({
       claudebotSessionId: "sess-1",
     });
   });

@@ -1,13 +1,14 @@
 import { runUserTurn } from "../conversation/run-user-turn.ts";
 import type { ServiceContainer } from "../runtime/services.ts";
+import { channelSessionKey } from "./types.ts";
 import type { ChannelInboundMessage, ChannelRunResult } from "./types.ts";
 
 export async function runChannelTurn(
   services: ServiceContainer,
   inbound: ChannelInboundMessage,
 ): Promise<ChannelRunResult> {
-  const conversationId = inbound.sessionKey ?? inbound.conversationId;
-  const existing = await services.channelBindings.find(inbound.channel, conversationId);
+  const externalChatId = channelSessionKey(inbound);
+  const existing = await services.channelBindings.find(inbound.channel, externalChatId);
   let assistantText = "";
   let completedText = "";
   let erroredText = "";
@@ -20,7 +21,7 @@ export async function runChannelTurn(
         if (event.type === "session.created") {
           await services.channelBindings.upsert({
             channel: inbound.channel,
-            externalConversationId: conversationId,
+            externalChatId,
             externalUserId: inbound.senderId,
             claudebotSessionId: event.session.id,
           });
@@ -35,7 +36,7 @@ export async function runChannelTurn(
   if (!existing && result.sessionId) {
     await services.channelBindings.upsert({
       channel: inbound.channel,
-      externalConversationId: conversationId,
+      externalChatId,
       externalUserId: inbound.senderId,
       claudebotSessionId: result.sessionId,
     });
@@ -47,11 +48,11 @@ export async function runChannelTurn(
     isError: result.isError,
     outbound: {
       channel: inbound.channel,
-      conversationId: inbound.conversationId,
+      chatId: inbound.chatId,
       content: assistantText || completedText || erroredText || "(no response)",
       isError: result.isError,
       media: [],
-      metadata: inbound.metadata,
+      metadata: inbound.metadata ?? {},
     },
   };
 }
