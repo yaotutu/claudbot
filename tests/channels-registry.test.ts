@@ -23,7 +23,8 @@ describe("channel registry", () => {
           botToken: "token",
           webhookPath: "/tg",
           secretToken: "secret",
-          allowedChatIds: [],
+          allowFrom: [],
+          streaming: false,
         },
       },
     }, {});
@@ -34,6 +35,7 @@ describe("channel registry", () => {
       telegram: { sendMessage: async (chatId, text) => { sent.push({ chatId, text }); } },
     });
 
+    expect(typeof registry.dispatchInbound).toBe("function");
     const res = await registry.handleHttp(
       new Request("http://x/tg", {
         method: "POST",

@@ -5,9 +5,9 @@ type ChannelBindingsFile = { bindings: ChannelSessionBinding[] };
 
 export type ChannelSessionBindingStore = {
   list: () => Promise<ChannelSessionBinding[]>;
-  find: (channel: ChannelId, externalConversationId: string) => Promise<ChannelSessionBinding | null>;
+  find: (channel: ChannelId, externalChatId: string) => Promise<ChannelSessionBinding | null>;
   upsert: (input: UpsertChannelSessionBindingInput) => Promise<ChannelSessionBinding>;
-  delete: (channel: ChannelId, externalConversationId: string) => Promise<boolean>;
+  delete: (channel: ChannelId, externalChatId: string) => Promise<boolean>;
 };
 
 export function createChannelSessionBindingStore(path: string): ChannelSessionBindingStore {
@@ -16,15 +16,15 @@ export function createChannelSessionBindingStore(path: string): ChannelSessionBi
     return file.bindings;
   };
 
-  const find = async (channel: ChannelId, externalConversationId: string): Promise<ChannelSessionBinding | null> => {
+  const find = async (channel: ChannelId, externalChatId: string): Promise<ChannelSessionBinding | null> => {
     const bindings = await list();
-    return bindings.find((binding) => binding.channel === channel && binding.externalConversationId === externalConversationId) ?? null;
+    return bindings.find((binding) => binding.channel === channel && binding.externalChatId === externalChatId) ?? null;
   };
 
   const upsert = async (input: UpsertChannelSessionBindingInput): Promise<ChannelSessionBinding> => {
     const bindings = await list();
     const now = new Date().toISOString();
-    const existing = bindings.find((binding) => binding.channel === input.channel && binding.externalConversationId === input.externalConversationId);
+    const existing = bindings.find((binding) => binding.channel === input.channel && binding.externalChatId === input.externalChatId);
     const nextBinding: ChannelSessionBinding = existing
       ? { ...existing, ...input, updatedAt: now }
       : { ...input, createdAt: now, updatedAt: now };
@@ -35,9 +35,9 @@ export function createChannelSessionBindingStore(path: string): ChannelSessionBi
     return nextBinding;
   };
 
-  const deleteBinding = async (channel: ChannelId, externalConversationId: string): Promise<boolean> => {
+  const deleteBinding = async (channel: ChannelId, externalChatId: string): Promise<boolean> => {
     const bindings = await list();
-    const nextBindings = bindings.filter((binding) => !(binding.channel === channel && binding.externalConversationId === externalConversationId));
+    const nextBindings = bindings.filter((binding) => !(binding.channel === channel && binding.externalChatId === externalChatId));
     if (nextBindings.length === bindings.length) return false;
     await writeJsonAtomic(path, { bindings: nextBindings });
     return true;

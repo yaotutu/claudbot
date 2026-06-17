@@ -1,11 +1,6 @@
-export type TelegramConfig = {
-  enabled: boolean;
-  mode: "webhook" | "polling";
-  botToken: string;
-  webhookPath: string;
-  secretToken: string;
-  allowedChatIds: string[];
-};
+import type { RuntimeConfig } from "../../config/schema.ts";
+
+export type TelegramConfig = RuntimeConfig["channels"]["telegram"];
 
 export type TelegramClient = {
   sendMessage: (chatId: string, text: string) => Promise<void>;
