@@ -4,6 +4,14 @@
 
 `src/` 是 Bun/TypeScript 运行时：`gateway/` 处理 HTTP 和 WebSocket 流量，`runtime/` 负责服务装配，`agent/` 封装 Claude SDK，`sessions/` 保存会话转录，`scheduler/` 运行定时任务，`tools/` 注册内置工具。根目录测试位于 `tests/*.test.ts`，测试夹具在 `tests/fixtures/`。React WebUI 独立放在 `webui/`；源码在 `webui/src/`，测试在 `webui/src/tests/`，生产构建输出到 `webui/dist/`。设计说明和计划位于 `docs/superpowers/`。
 
+每个具备独立职责的模块目录都应维护一个本目录 `README.md`，说明模块边界、关键入口、数据流、测试方式和常见修改注意事项。新增或大幅重构模块时，必须同步新增/更新对应 README，并在本文件的“模块 README 索引”中添加引用，方便后续 agent 进入模块前先读本地说明。
+
+## 模块 README 索引
+
+- `src/channels/README.md`: 外部聊天渠道协议、adapter 生命周期、运行时分发和平台实现边界。
+- `src/config/README.md`: 运行时配置 schema、加载顺序、路径派生和 channel 配置 alias 规则。
+- `webui/src/claudebot-ui/README.md`: Nanobot 风格 WebUI 迁移层，只做前端视图适配，不改变 Claudebot 原生协议。
+
 ## 当前架构边界
 
 本项目曾参考 openclaw/nanobot，但当前方向是 Claudebot 原生实现。WebUI 只保留 nanobot 风格的页面视觉、布局密度和基础交互体验；数据接口、WebSocket 协议、session/draft/remap 逻辑都应使用 Claudebot 自己的契约。不要为了兼容旧 nanobot adapter、旧 `ClientProvider`、旧 `useSessions`、旧 `useClaudebotStream` 协议而新增代码。历史消息格式和历史前端测试不要求兼容。
@@ -50,6 +58,12 @@ Claudebot 的运行时目录应区分“实例配置/运行数据”和“Agent 
 ```
 
 `src/config/paths.ts` 是这些路径的唯一来源。不要重新引入旧的 `agent/user.md`、`agent/soul.md`、`agent/memory.json`、`scheduler/schedules.json`、`scheduler/runs.json` 或 `sdk-config/` 路径；本项目不为旧目录做兼容、alias 或数据迁移。Profile 文本放在 `profile/`，长期记忆放在 `memory/`，SDK JSONL 会话放在 `sessions/`，外部 channel 绑定放在 `channels/channel-bindings.json`，QQ Gateway 会话状态放在 `channels/qq/`，定时任务定义放在 `schedules/jobs.json`，每次定时任务执行记录独立写入 `schedules/runs/<run-id>.json`。
+
+## 开发实例与端口隔离
+
+开发模式必须按 worktree 隔离运行实例，避免不同分支或 worktree 共用 gateway/WebUI 端口。`bun run dev` 相关实现应优先读取当前 worktree 的 `./.claudebot-local/config.json`；如果该文件不存在，则从 `~/.claudebot/config.json` 只读复制一份作为模板（全局配置不存在时使用 schema 默认值），随机选择当前空闲的 gateway 端口和 WebUI 端口，写入 `./.claudebot-local/config.json` 及必要的 dev 元数据。后续启动必须复用本地配置里的端口，除非用户删除 `./.claudebot-local/`。
+
+开发脚本不得写入或修改 `~/.claudebot/config.json`，全局配置只作为首次创建本地配置时的模板。启动 gateway 时必须将 `CLAUDEBOT_CONFIG` 指向当前 worktree 的本地配置；启动 WebUI 时必须使用本地 dev 端口，并通过 `CLAUDEBOT_API_URL` 指向同一 worktree 的 gateway。`./.claudebot-local/` 属于本地运行状态，必须加入 `.gitignore`，不得提交。
 
 ## 构建、测试与开发命令
 

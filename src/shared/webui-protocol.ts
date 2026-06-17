@@ -85,6 +85,43 @@ export type RuntimeMcpServerStatus = {
   [key: string]: unknown;
 };
 
+export type ThreadActivityStatus = "running" | "complete" | "error";
+
+export type ThreadActivity =
+  | {
+      id: string;
+      kind: "thinking";
+      runId: string;
+      text: string;
+      status: ThreadActivityStatus;
+      createdAt: string;
+      updatedAt: string;
+    }
+  | {
+      id: string;
+      kind: "tool";
+      runId: string;
+      toolId: string;
+      name: string;
+      phase: ToolFrame["phase"];
+      input?: unknown;
+      output?: unknown;
+      isError?: boolean;
+      status: ThreadActivityStatus;
+      createdAt: string;
+      updatedAt: string;
+    }
+  | {
+      id: string;
+      kind: "status";
+      runId: string;
+      text: string;
+      status: ThreadActivityStatus;
+      mcpServers?: RuntimeMcpServerStatus[];
+      createdAt: string;
+      updatedAt: string;
+    };
+
 export type ServerFrame =
   | { type: "session.activated"; sessionId: string | null }
   | { type: "session.created"; draftId?: string; session: SessionSummary }

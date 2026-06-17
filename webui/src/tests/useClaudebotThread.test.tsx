@@ -17,6 +17,7 @@ function makeClient() {
       return () => statusHandlers.delete(handler);
     },
     sendMessage: vi.fn(),
+    cancel: vi.fn(),
     emit: (frame: ServerFrame) => {
       for (const handler of handlers) handler(frame);
     },
@@ -181,5 +182,176 @@ describe("useClaudebotThread", () => {
       content: "mirror_error: flush failed",
       metadata: { error: true, runId: "r1" },
     });
+  });
+
+  it("records thinking, tool, and status frames for the active run", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => []);
+    const { result } = renderHook(() => useClaudebotThread({
+      sessionId: "s1",
+      sessionStatus: "persisted",
+      client,
+      fetchMessages,
+    }));
+
+    await waitFor(() => expect(client.frameHandlerCount()).toBe(1));
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
+      client.emit({ type: "run.thinking", sessionId: "s1", runId: "r1", text: "I should inspect the files. " });
+      client.emit({ type: "run.thinking", sessionId: "s1", runId: "r1", text: "Then patch the UI." });
+      client.emit({
+        type: "run.tool",
+        sessionId: "s1",
+        runId: "r1",
+        tool: { phase: "start", id: "tool-1", name: "Read", input: { file_path: "webui/src/App.tsx" } },
+      });
+      client.emit({
+        type: "run.tool",
+        sessionId: "s1",
+        runId: "r1",
+        tool: { phase: "end", id: "tool-1", name: "Read", output: "loaded" },
+      });
+      client.emit({ type: "run.status", sessionId: "s1", runId: "r1", status: "Reading source files" });
+    });
+
+    expect(result.current.runStatus).toBe("Reading source files");
+    expect(result.current.activities).toEqual([
+      expect.objectContaining({
+        id: "thinking-r1",
+        kind: "thinking",
+        text: "I should inspect the files. Then patch the UI.",
+        status: "running",
+      }),
+      expect.objectContaining({
+        id: "tool-tool-1",
+        kind: "tool",
+        name: "Read",
+        phase: "end",
+        status: "complete",
+      }),
+      expect.objectContaining({
+        id: "status-r1",
+        kind: "status",
+        text: "Reading source files",
+        status: "running",
+      }),
+    ]);
+  });
+
+  it("persists completed run activity on its assistant message without carrying it into the next run", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => []);
+    const { result } = renderHook(() => useClaudebotThread({
+      sessionId: "s1",
+      sessionStatus: "persisted",
+      client,
+      fetchMessages,
+    }));
+
+    await waitFor(() => expect(client.frameHandlerCount()).toBe(1));
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
+      client.emit({ type: "run.thinking", sessionId: "s1", runId: "r1", text: "first turn" });
+      client.emit({
+        type: "run.tool",
+        sessionId: "s1",
+        runId: "r1",
+        tool: { phase: "end", id: "tool-1", name: "memory_search", output: "done" },
+      });
+      client.emit({ type: "run.completed", sessionId: "s1", runId: "r1", isError: false });
+      client.emit({
+        type: "message.appended",
+        sessionId: "s1",
+        message: {
+          id: "a1",
+          role: "assistant",
+          content: "first answer",
+          createdAt: "2026-06-10T10:00:00.000Z",
+          metadata: {
+            runId: "r1",
+            activities: [
+              {
+                id: "thinking-r1",
+                kind: "thinking",
+                runId: "r1",
+                text: "first turn from persisted metadata",
+                status: "complete",
+                createdAt: "2026-06-10T10:00:00.000Z",
+                updatedAt: "2026-06-10T10:00:01.000Z",
+              },
+              {
+                id: "tool-tool-1",
+                kind: "tool",
+                runId: "r1",
+                toolId: "tool-1",
+                name: "memory_search",
+                phase: "end",
+                output: "done",
+                status: "complete",
+                createdAt: "2026-06-10T10:00:00.000Z",
+                updatedAt: "2026-06-10T10:00:01.000Z",
+              },
+            ],
+          },
+        },
+      });
+    });
+
+    expect(result.current.streaming).toBe(false);
+    expect(result.current.activities).toEqual([]);
+    expect(result.current.runStatus).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      id: "a1",
+      role: "assistant",
+      content: "first answer",
+      metadata: {
+        runId: "r1",
+        activities: [
+          expect.objectContaining({ id: "thinking-r1", text: "first turn from persisted metadata", status: "complete" }),
+          expect.objectContaining({ id: "tool-tool-1", name: "memory_search", status: "complete" }),
+        ],
+      },
+    });
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r2" });
+      client.emit({ type: "run.thinking", sessionId: "s1", runId: "r2", text: "second turn" });
+    });
+
+    expect(result.current.activities).toEqual([
+      expect.objectContaining({
+        id: "thinking-r2",
+        text: "second turn",
+      }),
+    ]);
+  });
+
+  it("cancels the active persisted session through chat.cancel", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => []);
+    const { result } = renderHook(() => useClaudebotThread({
+      sessionId: "s1",
+      sessionStatus: "persisted",
+      client,
+      fetchMessages,
+    }));
+
+    await waitFor(() => expect(client.frameHandlerCount()).toBe(1));
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
+    });
+    expect(result.current.streaming).toBe(true);
+
+    act(() => {
+      result.current.cancel();
+    });
+
+    expect(client.cancel).toHaveBeenCalledWith("s1");
+    expect(result.current.streaming).toBe(false);
+    expect(result.current.runStatus).toBeNull();
+    expect(result.current.activities).toEqual([]);
   });
 });

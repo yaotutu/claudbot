@@ -2,14 +2,16 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, { pickWsUrl } from "@/App";
-import type { ServerFrame, WebuiBootstrap } from "@/lib/claudebot-types";
+import type { ServerFrame, ThreadActivity, ThreadMessage, WebuiBootstrap } from "@/lib/claudebot-types";
 
 const frameHandlers = new Set<(frame: ServerFrame) => void>();
 const sendMessage = vi.fn();
+const cancel = vi.fn();
 const activateSession = vi.fn();
 const connect = vi.fn();
 const close = vi.fn();
 let bootstrapPayload: WebuiBootstrap;
+let threadRows: ThreadMessage[];
 let scheduleRows: Array<Record<string, unknown>>;
 let notificationRows: Array<Record<string, unknown>>;
 
@@ -22,9 +24,44 @@ function persistedBootstrap(): WebuiBootstrap {
   };
 }
 
+function persistedActivities(runId: string, thinking: string, toolName = "mcp__claudebot__memory_search"): ThreadActivity[] {
+  return [
+    {
+      id: `status-${runId}-session_init`,
+      kind: "status",
+      runId,
+      text: "session_init",
+      status: "complete",
+      createdAt: "2026-06-17T00:00:00.000Z",
+      updatedAt: "2026-06-17T00:00:01.000Z",
+      mcpServers: [{ name: "claudebot", status: "connected" }],
+    },
+    {
+      id: `thinking-${runId}`,
+      kind: "thinking",
+      runId,
+      text: thinking,
+      status: "complete",
+      createdAt: "2026-06-17T00:00:00.000Z",
+      updatedAt: "2026-06-17T00:00:01.000Z",
+    },
+    {
+      id: `tool-${runId}-1`,
+      kind: "tool",
+      runId,
+      toolId: `${runId}-1`,
+      name: toolName,
+      phase: "end",
+      status: "complete",
+      createdAt: "2026-06-17T00:00:00.000Z",
+      updatedAt: "2026-06-17T00:00:01.000Z",
+    },
+  ];
+}
+
 vi.mock("@/lib/claudebot-api", () => ({
   fetchBootstrap: vi.fn(async () => bootstrapPayload),
-  fetchThreadMessages: vi.fn(async () => [{ id: "m1", role: "user", content: "hello", createdAt: "2026-06-10T09:59:40.000Z", metadata: {} }]),
+  fetchThreadMessages: vi.fn(async () => threadRows),
   listSchedules: vi.fn(async () => scheduleRows),
   fetchNotifications: vi.fn(async () => notificationRows),
   markNotificationsRead: vi.fn(async () => 1),
@@ -42,6 +79,7 @@ vi.mock("@/lib/claudebot-ws", () => ({
     connect,
     close,
     sendMessage,
+    cancel,
     activateSession,
     onFrame: (handler: (frame: ServerFrame) => void) => {
       frameHandlers.add(handler);
@@ -57,10 +95,12 @@ vi.mock("@/lib/claudebot-ws", () => ({
 describe("App native layout", () => {
   beforeEach(() => {
     bootstrapPayload = persistedBootstrap();
+    threadRows = [{ id: "m1", role: "user", content: "hello", createdAt: "2026-06-10T09:59:40.000Z", metadata: {} }];
     scheduleRows = [{ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: "succeeded", lastError: null, runCount: 1, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" }];
     notificationRows = [{ id: "notif_1", source: "schedule", title: "定时任务 daily", content: "ok", status: "succeeded", scheduleId: "sch_1", runId: "run_1", delivery: { type: "webui_inbox", scope: "global" }, createdAt: "2026-06-11T00:00:01.000Z", readAt: null }];
     frameHandlers.clear();
     sendMessage.mockClear();
+    cancel.mockClear();
     activateSession.mockClear();
     connect.mockClear();
     close.mockClear();
@@ -75,11 +115,13 @@ describe("App native layout", () => {
     )).toBe("ws://127.0.0.1:18790/ws");
   });
 
-  it("renders persisted sessions and visible MVP panels", async () => {
+  it("renders persisted sessions in the Nanobot-style shell and visible panels", async () => {
     render(<App />);
 
     expect((await screen.findAllByText("hello")).length).toBeGreaterThan(0);
     expect(screen.getByText("hello preview")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toBeInTheDocument();
+    expect(screen.getByText("Today")).toBeInTheDocument();
     expect(await screen.findByText("Connected")).toBeInTheDocument();
     expect(screen.getByLabelText("Tasks")).toHaveTextContent("1");
 
@@ -105,6 +147,31 @@ describe("App native layout", () => {
     expect(screen.getByPlaceholderText("Name")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Message")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("Tasks")).not.toHaveTextContent("1"));
+  });
+
+  it("renders persisted run activity from fetched thread messages", async () => {
+    threadRows = [
+      { id: "u1", role: "user", content: "test activity", createdAt: "2026-06-17T00:00:00.000Z", metadata: {} },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "done",
+        createdAt: "2026-06-17T00:00:01.000Z",
+        metadata: {
+          runId: "r1",
+          activities: persistedActivities("r1", "Need to search memory."),
+        },
+      },
+    ];
+
+    render(<App />);
+
+    expect(await screen.findByText("done")).toBeInTheDocument();
+    expect(screen.getByText("session_init")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.getByText("Need to search memory.")).toBeInTheDocument();
+    expect(screen.getByText("mcp__claudebot__memory_search")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Run activity")).toHaveLength(1);
   });
 
   it("shows notification results even when their original schedule no longer exists", async () => {
@@ -170,6 +237,7 @@ describe("App native layout", () => {
 
     render(<App />);
 
+    expect(await screen.findByRole("heading", { name: "What can I help you ship today?" })).toBeInTheDocument();
     const input = await screen.findByPlaceholderText("Ask anything...");
     await waitFor(() => expect(input).not.toBeDisabled());
 
@@ -178,5 +246,73 @@ describe("App native layout", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: "start from landing", draftId: expect.stringMatching(/^draft-/) }));
     expect(await screen.findByText("start from landing")).toBeInTheDocument();
+  });
+
+  it("keeps each run activity with its assistant message without duplicating it at the thread tail", async () => {
+    render(<App />);
+    expect(await screen.findByText("hello preview")).toBeInTheDocument();
+
+    act(() => {
+      for (const handler of frameHandlers) {
+        handler({ type: "run.started", sessionId: "s1", runId: "r1" });
+        handler({ type: "run.thinking", sessionId: "s1", runId: "r1", text: "Checking the workspace." });
+        handler({
+          type: "run.tool",
+          sessionId: "s1",
+          runId: "r1",
+          tool: { phase: "start", id: "tool-1", name: "Read", input: { file_path: "src/server.ts" } },
+        });
+        handler({ type: "run.status", sessionId: "s1", runId: "r1", status: "Reading source files" });
+      }
+    });
+
+    expect(await screen.findByText("Thinking")).toBeInTheDocument();
+    expect(screen.getByText("Checking the workspace.")).toBeInTheDocument();
+    expect(screen.getByText("Read")).toBeInTheDocument();
+    expect(screen.getAllByText("Reading source files").length).toBeGreaterThan(0);
+
+    act(() => {
+      for (const handler of frameHandlers) {
+        handler({ type: "run.completed", sessionId: "s1", runId: "r1", isError: false });
+        handler({
+          type: "message.appended",
+          sessionId: "s1",
+          message: {
+            id: "a1",
+            role: "assistant",
+            content: "First answer.",
+            createdAt: "2026-06-10T10:00:00.000Z",
+            metadata: {
+              runId: "r1",
+              activities: persistedActivities("r1", "Checking the workspace.", "Read"),
+            },
+          },
+        });
+      }
+    });
+
+    expect((await screen.findAllByText("First answer.")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Checking the workspace.")).toBeInTheDocument();
+    expect(screen.getByText("Read")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Run activity")).toHaveLength(1);
+
+    act(() => {
+      for (const handler of frameHandlers) {
+        handler({ type: "run.started", sessionId: "s1", runId: "r2" });
+        handler({ type: "run.thinking", sessionId: "s1", runId: "r2", text: "Second turn only." });
+      }
+    });
+
+    expect(await screen.findByText("Second turn only.")).toBeInTheDocument();
+    expect(screen.getByText("Checking the workspace.")).toBeInTheDocument();
+    expect(screen.getAllByText("Thinking")).toHaveLength(2);
+    expect(screen.getAllByLabelText("Run activity")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop generating" }));
+
+    expect(cancel).toHaveBeenCalledWith("s1");
+    await waitFor(() => expect(screen.queryByText("Second turn only.")).not.toBeInTheDocument());
+    expect(screen.getByText("Checking the workspace.")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Run activity")).toHaveLength(1);
   });
 });
