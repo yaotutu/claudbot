@@ -125,60 +125,6 @@ describe("runtime config", () => {
     });
   });
 
-  test("accepts Nanobot-style snake_case channel aliases", () => {
-    const config = resolveRuntimeConfig({
-      channels: {
-        send_progress: false,
-        send_tool_hints: true,
-        show_reasoning: false,
-        send_max_retries: 5,
-        telegram: {
-          enabled: true,
-          bot_token: "tg-token",
-          webhook_path: "/tg-alias",
-          secret_token: "tg-secret",
-          allow_from: ["123"],
-          streaming: true,
-        },
-        qq: {
-          enabled: true,
-          app_id: "qq-app",
-          client_secret: "qq-secret",
-          session_dir: "/tmp/qq",
-          typing_keep_alive: false,
-          parse_face_emoji: false,
-          allow_from: ["c2c:user-a"],
-          streaming: true,
-        },
-      },
-    } as never, { homeEnv: "", configDir: "/tmp/cfg" });
-
-    expect(config.channels).toMatchObject({
-      sendProgress: false,
-      sendToolHints: true,
-      showReasoning: false,
-      sendMaxRetries: 5,
-    });
-    expect(config.channels.telegram).toMatchObject({
-      enabled: true,
-      botToken: "tg-token",
-      webhookPath: "/tg-alias",
-      secretToken: "tg-secret",
-      allowFrom: ["123"],
-      streaming: true,
-    });
-    expect(config.channels.qq).toMatchObject({
-      enabled: true,
-      appId: "qq-app",
-      clientSecret: "qq-secret",
-      sessionDir: "/tmp/qq",
-      typingKeepAlive: false,
-      parseFaceEmoji: false,
-      allowFrom: ["c2c:user-a"],
-      streaming: true,
-    });
-  });
-
   test("derives user-facing runtime directories from home", () => {
     const config = resolveRuntimeConfig({ home: "/tmp/bot" }, { homeEnv: "", configDir: "/tmp/cfg" });
     const paths = runtimePaths(config);
@@ -191,7 +137,6 @@ describe("runtime config", () => {
     expect(paths.memoryDir).toBe("/tmp/bot/memory");
     expect(paths.longTermMemoryFile).toBe("/tmp/bot/memory/MEMORY.md");
     expect(paths.memoryEventsFile).toBe("/tmp/bot/memory/memory_events.jsonl");
-    expect(paths.deprecatedMemoryJsonFile).toBe("/tmp/bot/memory/memory.json");
     expect(paths.schedulesDir).toBe("/tmp/bot/schedules");
     expect(paths.schedulesFile).toBe("/tmp/bot/schedules/jobs.json");
     expect(paths.scheduleRunsDir).toBe("/tmp/bot/schedules/runs");

@@ -4,7 +4,7 @@
 
 ## 关键入口
 
-- `schema.ts`: Zod v4 schema、默认值、输入 alias 归一化和导出的 `RuntimeConfig` 类型。
+- `schema.ts`: Zod v4 schema、默认值和导出的 `RuntimeConfig` 类型。
 - `loader.ts`: 配置加载顺序、环境变量覆盖和 `resolveRuntimeConfig`。
 - `paths.ts`: 由已解析配置派生所有运行时目录，是路径布局唯一来源。
 
@@ -20,13 +20,12 @@
 
 ## Channel 配置约定
 
-`channels` 采用 Nanobot 风格的共享设置：
+`channels` 采用共享设置：
 
 - 顶层：`sendProgress`、`sendToolHints`、`showReasoning`、`sendMaxRetries`。
 - 单个平台：`enabled`、`allowFrom`、`streaming` 加平台专属字段。
-- 输入允许 snake_case alias，例如 `send_progress`、`allow_from`、`bot_token`，解析结果保持 camelCase。
 
-旧 channel allow-list 字段只作为输入归一化 alias，不应在新代码中读取；adapter 统一读取 `allowFrom`。
+配置只认 camelCase 字段名；adapter 统一读取 `allowFrom`（空数组表示允许全部，`*` 表示显式全放行）。
 
 ## 修改注意事项
 

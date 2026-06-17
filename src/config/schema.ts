@@ -35,42 +35,6 @@ const ToolsSchema = z.object({
   permissions: ToolPermissionsSchema,
 });
 
-type UnknownRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeAliases(input: unknown, aliases: Record<string, string>): UnknownRecord {
-  const result = isRecord(input) ? { ...input } : {};
-  for (const [alias, canonical] of Object.entries(aliases)) {
-    if (result[canonical] === undefined && result[alias] !== undefined) {
-      result[canonical] = result[alias];
-    }
-  }
-  return result;
-}
-
-function appendStringArray(values: string[], value: unknown): void {
-  if (!Array.isArray(value)) return;
-  for (const item of value) {
-    if (typeof item === "string" && !values.includes(item)) values.push(item);
-  }
-}
-
-function normalizeChannelAliases(
-  input: unknown,
-  aliases: Record<string, string>,
-  allowFromAliases: string[] = [],
-): UnknownRecord {
-  const result = normalizeAliases(input, { ...aliases, allow_from: "allowFrom" });
-  const allowFrom: string[] = [];
-  appendStringArray(allowFrom, result.allowFrom);
-  for (const alias of allowFromAliases) appendStringArray(allowFrom, result[alias]);
-  if (allowFrom.length > 0) result.allowFrom = allowFrom;
-  return result;
-}
-
 function commonChannelFields(enabledDefault: boolean) {
   return {
     enabled: z.boolean().default(enabledDefault),
@@ -91,6 +55,7 @@ const DefaultTelegramChannel = {
   streaming: false,
 };
 
+// Feishu channel config is a placeholder — there is no adapter implementation yet.
 const DefaultFeishuChannel = {
   enabled: false,
   appId: "",
@@ -113,70 +78,36 @@ const DefaultQqChannel = {
   streaming: false,
 };
 
-const WebuiChannelSchema = z.preprocess(
-  (input) => normalizeAliases(input, {}),
-  z.object({
-    enabled: z.boolean().default(true),
-  }),
-).default(DefaultWebuiChannel);
+const WebuiChannelSchema = z.object({
+  enabled: z.boolean().default(true),
+}).default(DefaultWebuiChannel);
 
-const TelegramChannelSchema = z.preprocess(
-  (input) => normalizeChannelAliases(input, {
-    bot_token: "botToken",
-    webhook_path: "webhookPath",
-    secret_token: "secretToken",
-  }, ["allowedChatIds", "allowed_chat_ids"]),
-  z.object({
-    ...commonChannelFields(false),
-    mode: z.enum(["webhook", "polling"]).default("webhook"),
-    botToken: z.string().default(""),
-    webhookPath: z.string().default("/channels/telegram/webhook"),
-    secretToken: z.string().default(""),
-  }),
-).default(DefaultTelegramChannel);
+const TelegramChannelSchema = z.object({
+  ...commonChannelFields(false),
+  mode: z.enum(["webhook", "polling"]).default("webhook"),
+  botToken: z.string().default(""),
+  webhookPath: z.string().default("/channels/telegram/webhook"),
+  secretToken: z.string().default(""),
+}).default(DefaultTelegramChannel);
 
-const FeishuChannelSchema = z.preprocess(
-  (input) => normalizeChannelAliases(input, {
-    app_id: "appId",
-    app_secret: "appSecret",
-    verification_token: "verificationToken",
-    encrypt_key: "encryptKey",
-    webhook_path: "webhookPath",
-  }, ["allowedChatIds", "allowed_chat_ids"]),
-  z.object({
-    ...commonChannelFields(false),
-    appId: z.string().default(""),
-    appSecret: z.string().default(""),
-    verificationToken: z.string().default(""),
-    encryptKey: z.string().default(""),
-    webhookPath: z.string().default("/channels/feishu/events"),
-  }),
-).default(DefaultFeishuChannel);
+// Feishu channel config is a placeholder — there is no adapter implementation yet.
+const FeishuChannelSchema = z.object({
+  ...commonChannelFields(false),
+  appId: z.string().default(""),
+  appSecret: z.string().default(""),
+  verificationToken: z.string().default(""),
+  encryptKey: z.string().default(""),
+  webhookPath: z.string().default("/channels/feishu/events"),
+}).default(DefaultFeishuChannel);
 
-const QqChannelSchema = z.preprocess(
-  (input) => normalizeChannelAliases(input, {
-    app_id: "appId",
-    client_secret: "clientSecret",
-    session_dir: "sessionDir",
-    typing_keep_alive: "typingKeepAlive",
-    parse_face_emoji: "parseFaceEmoji",
-  }, [
-    "allowedConversationIds",
-    "allowed_conversation_ids",
-    "allowedUserIds",
-    "allowed_user_ids",
-    "allowedGroupOpenids",
-    "allowed_group_openids",
-  ]),
-  z.object({
-    ...commonChannelFields(false),
-    appId: z.string().default(""),
-    clientSecret: z.string().default(""),
-    sessionDir: z.string().default(""),
-    typingKeepAlive: z.boolean().default(true),
-    parseFaceEmoji: z.boolean().default(true),
-  }),
-).default(DefaultQqChannel);
+const QqChannelSchema = z.object({
+  ...commonChannelFields(false),
+  appId: z.string().default(""),
+  clientSecret: z.string().default(""),
+  sessionDir: z.string().default(""),
+  typingKeepAlive: z.boolean().default(true),
+  parseFaceEmoji: z.boolean().default(true),
+}).default(DefaultQqChannel);
 
 const DefaultChannels = {
   sendProgress: true,
@@ -189,12 +120,7 @@ const DefaultChannels = {
   qq: DefaultQqChannel,
 };
 
-const ChannelsSchema = z.preprocess((input) => normalizeAliases(input, {
-  send_progress: "sendProgress",
-  send_tool_hints: "sendToolHints",
-  show_reasoning: "showReasoning",
-  send_max_retries: "sendMaxRetries",
-}), z.object({
+const ChannelsSchema = z.object({
   sendProgress: z.boolean().default(true),
   sendToolHints: z.boolean().default(false),
   showReasoning: z.boolean().default(true),
@@ -203,7 +129,7 @@ const ChannelsSchema = z.preprocess((input) => normalizeAliases(input, {
   telegram: TelegramChannelSchema,
   feishu: FeishuChannelSchema,
   qq: QqChannelSchema,
-})).default(DefaultChannels);
+}).default(DefaultChannels);
 
 const McpServerNameSchema = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/).refine((name) => name !== "claudebot", {
   message: "external MCP server name 'claudebot' is reserved for native tools",

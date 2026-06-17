@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, readFile, rm } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { ensureDir, writeTextAtomic } from "../utils/fs.ts";
 import type {
   MemoryEventRecord,
@@ -20,7 +20,6 @@ export async function initMemoryMarkdownStore(paths: MemoryMarkdownPaths): Promi
   if (!(await Bun.file(paths.eventsFile).exists())) {
     await writeTextAtomic(paths.eventsFile, "");
   }
-  await deleteDeprecatedMemoryJson(paths);
 }
 
 export async function readMemoryFile(paths: MemoryMarkdownPaths, name: MemoryReadableFile): Promise<VersionedText> {
@@ -51,12 +50,6 @@ export async function searchMemoryText(
     }
   }
   return hits;
-}
-
-async function deleteDeprecatedMemoryJson(paths: MemoryMarkdownPaths): Promise<void> {
-  if (!(await Bun.file(paths.deprecatedMemoryJsonFile).exists())) return;
-  await rm(paths.deprecatedMemoryJsonFile, { force: true });
-  await appendMemoryEvent(paths, { type: "deprecated_memory_json_deleted", createdAt: new Date().toISOString() });
 }
 
 function resolveReadablePath(paths: MemoryMarkdownPaths, name: MemoryReadableFile): string {
