@@ -1,6 +1,13 @@
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { NormalizedEvent } from "../agent/events.ts";
-import type { SessionSummary as SessionSummaryWire } from "../shared/webui-protocol.ts";
+import type {
+  RuntimeMcpServerStatus,
+  SessionSummary as SessionSummaryWire,
+  ThreadActivity,
+  ThreadActivityStatus,
+  ToolFrame,
+} from "../shared/webui-protocol.ts";
+import { appendSessionJsonlEntry } from "../sessions/jsonl-store.ts";
 import type { ConversationEvent, ConversationSink, RunUserTurnInput, RunUserTurnResult } from "./types.ts";
 
 // SDK sessionStoreFlush defaults to 'batched'. After turn_done we wait this
@@ -23,8 +30,10 @@ export async function runUserTurn(
   let turnErrored = false;
   let finalResult = "";
   let sessionCreated = false;
+  let activities: ThreadActivity[] = [];
 
   const handleEvent = async (ev: NormalizedEvent) => {
+    activities = collectRunActivity(activities, runId, ev);
     if (ev.type === "error" && ev.message.includes("mirror_error")) {
       await sink.send({ type: "run.error", sessionId: ev.sessionId, runId, message: ev.message });
       return;
@@ -88,6 +97,17 @@ export async function runUserTurn(
 
   const finalText = collected || finalResult || (turnErrored ? "(no response)" : "(no response)");
   const activeSdkId = lastSessionId ?? sdkSessionId ?? "pending";
+  const finalActivities = finalizeActivities(activities, turnErrored);
+  if (activeSdkId !== "pending" && finalActivities.length > 0) {
+    await appendSessionJsonlEntry(services.paths.sessionsDir, activeSdkId, {
+      type: "claudebot-run-activity",
+      sessionId: activeSdkId,
+      runId,
+      activities: finalActivities,
+      uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+    });
+  }
   await sink.send({ type: "run.completed", sessionId: activeSdkId, runId, isError: turnErrored, result: finalResult });
   await sink.send({
     type: "message.appended",
@@ -97,11 +117,146 @@ export async function runUserTurn(
       role: turnErrored ? "system" : "assistant",
       content: finalText,
       createdAt: new Date().toISOString(),
-      metadata: turnErrored ? { error: true } : {},
+      metadata: {
+        ...(turnErrored ? { error: true } : {}),
+        runId,
+        ...(finalActivities.length > 0 ? { activities: finalActivities } : {}),
+      },
     },
   });
 
   return { sessionId: lastSessionId ?? sdkSessionId ?? null, runId, result: finalResult, isError: turnErrored };
+}
+
+function collectRunActivity(
+  activities: ThreadActivity[],
+  runId: string,
+  event: NormalizedEvent,
+): ThreadActivity[] {
+  const timestamp = new Date().toISOString();
+  if (event.type === "status") {
+    return upsertStatusActivity(activities, runId, event.status, event.mcpServers, timestamp);
+  }
+  if (event.type === "thinking_delta") {
+    return appendThinkingActivity(activities, runId, event.thinking, timestamp);
+  }
+  if (event.type === "tool_start") {
+    return upsertToolActivity(activities, runId, {
+      phase: "start",
+      id: event.id,
+      name: event.name,
+      input: event.input,
+    }, timestamp);
+  }
+  if (event.type === "tool_result") {
+    return upsertToolActivity(activities, runId, {
+      phase: event.isError ? "error" : "end",
+      id: event.id,
+      output: event.output,
+      isError: event.isError,
+    }, timestamp);
+  }
+  return activities;
+}
+
+function appendThinkingActivity(
+  activities: ThreadActivity[],
+  runId: string,
+  text: string,
+  timestamp: string,
+): ThreadActivity[] {
+  const id = `thinking-${runId}`;
+  const index = activities.findIndex((activity) => activity.id === id);
+  if (index === -1) {
+    return [...activities, {
+      id,
+      kind: "thinking",
+      runId,
+      text,
+      status: "running",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }
+  return activities.map((activity) => activity.id === id && activity.kind === "thinking"
+    ? { ...activity, text: `${activity.text}${text}`, updatedAt: timestamp }
+    : activity);
+}
+
+function upsertToolActivity(
+  activities: ThreadActivity[],
+  runId: string,
+  tool: ToolFrame,
+  timestamp: string,
+): ThreadActivity[] {
+  const id = `tool-${tool.id}`;
+  const status = tool.phase === "error" || tool.isError ? "error" : tool.phase === "end" ? "complete" : "running";
+  const existing = activities.find((activity) => activity.id === id);
+  if (!existing) {
+    return [...activities, {
+      id,
+      kind: "tool",
+      runId,
+      toolId: tool.id,
+      name: tool.name?.trim() || "Tool",
+      phase: tool.phase,
+      input: tool.input,
+      output: tool.output,
+      isError: tool.isError,
+      status,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }
+  return activities.map((activity) => activity.id === id && activity.kind === "tool"
+    ? {
+        ...activity,
+        name: tool.name?.trim() || activity.name,
+        phase: tool.phase,
+        input: tool.input ?? activity.input,
+        output: tool.output ?? activity.output,
+        isError: tool.isError ?? activity.isError,
+        status,
+        updatedAt: timestamp,
+      }
+    : activity);
+}
+
+function upsertStatusActivity(
+  activities: ThreadActivity[],
+  runId: string,
+  text: string,
+  mcpServers: RuntimeMcpServerStatus[] | undefined,
+  timestamp: string,
+): ThreadActivity[] {
+  const id = `status-${runId}-${text}`;
+  const existing = activities.find((activity) => activity.id === id);
+  if (!existing) {
+    return [...activities, {
+      id,
+      kind: "status",
+      runId,
+      text,
+      status: "running",
+      mcpServers,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }
+  return activities.map((activity) => activity.id === id && activity.kind === "status"
+    ? { ...activity, mcpServers, updatedAt: timestamp }
+    : activity);
+}
+
+function finalizeActivities(
+  activities: ThreadActivity[],
+  status: Extract<ThreadActivityStatus, "complete" | "error"> | boolean,
+): ThreadActivity[] {
+  const finalStatus = typeof status === "boolean" ? status ? "error" : "complete" : status;
+  const timestamp = new Date().toISOString();
+  return activities.map((activity) => activity.status === "running"
+    ? { ...activity, status: finalStatus, updatedAt: timestamp }
+    : activity);
 }
 
 async function resolveResumeSessionId(services: ServiceContainer, input: RunUserTurnInput): Promise<string | undefined> {
