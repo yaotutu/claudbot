@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
-  RuntimeMcpServerStatus,
   ServerFrame,
   ThreadActivity,
-  ThreadActivityStatus,
   ThreadMessage,
   ToolFrame,
 } from "@/lib/claudebot-types";
+import { appendActivity, finalizeActivities } from "../../../src/shared/activity-reducer.ts";
 
 type FrameClient = {
   onFrame: (handler: (frame: ServerFrame) => void) => () => void;
@@ -112,14 +111,14 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
         setStreaming(true);
         activeRunIdRef.current = frame.runId;
         setRunStatus("Thinking...");
-        updateRunActivities(frame.runId, (current) => appendThinkingActivity(current, frame.runId, frame.text));
+        updateRunActivities(frame.runId, (current) => appendActivity(current, frame.runId, { kind: "thinking", text: frame.text }));
         return;
       }
       if (frame.type === "run.tool" && frame.sessionId === effectiveSessionIdRef.current) {
         setStreaming(true);
         activeRunIdRef.current = frame.runId;
         setRunStatus(toolStatusLabel(frame.tool));
-        updateRunActivities(frame.runId, (current) => upsertToolActivity(current, frame.runId, frame.tool));
+        updateRunActivities(frame.runId, (current) => appendActivity(current, frame.runId, { kind: "tool", tool: frame.tool }));
         return;
       }
       if (frame.type === "run.status" && frame.sessionId === effectiveSessionIdRef.current) {
@@ -128,10 +127,9 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
         if (!frame.runId) return;
         const runId = frame.runId;
         activeRunIdRef.current = runId;
-        updateRunActivities(runId, (current) => upsertStatusActivity(current, {
-          runId,
+        updateRunActivities(runId, (current) => appendActivity(current, runId, {
+          kind: "status",
           text: statusText,
-          status: "running",
           mcpServers: frame.mcpServers,
         }));
         return;
@@ -159,7 +157,7 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
       if (frame.type === "run.completed" && frame.sessionId === effectiveSessionIdRef.current) {
         updateRunActivities(
           frame.runId,
-          (current) => finalizedRunActivities(current, frame.isError ? "error" : "complete"),
+          (current) => finalizeActivities(current, frame.isError ? "error" : "complete"),
         );
         setStreaming(false);
         setRunStatus(null);
@@ -170,7 +168,7 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
         const runId = frame.runId ?? activeRunIdRef.current;
         const errorActivities = runId ? updateRunActivities(
           runId,
-          (current) => finalizedRunActivities(current, "error"),
+          (current) => finalizeActivities(current, "error"),
         ) : [];
         setStreaming(false);
         setRunStatus(null);
@@ -225,129 +223,6 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
   }, [options.client, options.sessionId, options.sessionStatus]);
 
   return { messages, activities, runStatus, loading, streaming, send, cancel };
-}
-
-function finalizedRunActivities(
-  activities: ThreadActivity[],
-  status: Extract<ThreadActivityStatus, "complete" | "error">,
-): ThreadActivity[] {
-  const timestamp = nowIso();
-  return activities.map((activity) => activity.status === "running"
-    ? { ...activity, status, updatedAt: timestamp }
-    : activity);
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function appendThinkingActivity(
-  activities: ThreadActivity[],
-  runId: string,
-  text: string,
-): ThreadActivity[] {
-  const id = `thinking-${runId}`;
-  const timestamp = nowIso();
-  const index = activities.findIndex((activity) => activity.id === id);
-  if (index === -1) {
-    return [...activities, {
-      id,
-      kind: "thinking",
-      runId,
-      text,
-      status: "running",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }];
-  }
-  const next = activities.slice();
-  const current = next[index];
-  if (current.kind !== "thinking") return activities;
-  next[index] = {
-    ...current,
-    text: `${current.text}${text}`,
-    status: "running",
-    updatedAt: timestamp,
-  };
-  return next;
-}
-
-function upsertToolActivity(
-  activities: ThreadActivity[],
-  runId: string,
-  tool: ToolFrame,
-): ThreadActivity[] {
-  const id = `tool-${tool.id}`;
-  const timestamp = nowIso();
-  const status = tool.phase === "error" || tool.isError ? "error" : tool.phase === "end" ? "complete" : "running";
-  const index = activities.findIndex((activity) => activity.id === id);
-  if (index === -1) {
-    return [...activities, {
-      id,
-      kind: "tool",
-      runId,
-      toolId: tool.id,
-      name: tool.name?.trim() || "Tool",
-      phase: tool.phase,
-      input: tool.input,
-      output: tool.output,
-      isError: tool.isError,
-      status,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }];
-  }
-  const next = activities.slice();
-  const current = next[index];
-  if (current.kind !== "tool") return activities;
-  next[index] = {
-    ...current,
-    name: tool.name?.trim() || current.name,
-    phase: tool.phase,
-    input: tool.input ?? current.input,
-    output: tool.output ?? current.output,
-    isError: tool.isError ?? current.isError,
-    status,
-    updatedAt: timestamp,
-  };
-  return next;
-}
-
-function upsertStatusActivity(
-  activities: ThreadActivity[],
-  input: {
-    runId: string;
-    text: string;
-    status: ThreadActivityStatus;
-    mcpServers?: RuntimeMcpServerStatus[];
-  },
-): ThreadActivity[] {
-  const id = `status-${input.runId ?? "global"}`;
-  const timestamp = nowIso();
-  const index = activities.findIndex((activity) => activity.id === id);
-  if (index === -1) {
-    return [...activities, {
-      id,
-      kind: "status",
-      runId: input.runId,
-      text: input.text,
-      status: input.status,
-      mcpServers: input.mcpServers,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }];
-  }
-  const next = activities.slice();
-  const current = next[index];
-  if (current.kind !== "status") return activities;
-  next[index] = {
-    ...current,
-    text: input.text,
-    status: input.status,
-    mcpServers: input.mcpServers,
-    updatedAt: timestamp,
-  };
-  return next;
 }
 
 function toolStatusLabel(tool: ToolFrame): string {
