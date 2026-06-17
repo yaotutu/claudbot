@@ -123,13 +123,14 @@ export function useClaudebotThread(options: UseClaudebotThreadOptions) {
         return;
       }
       if (frame.type === "run.status" && frame.sessionId === effectiveSessionIdRef.current) {
-        setRunStatus(frame.status);
+        const statusText = formatRunStatus(frame);
+        setRunStatus(statusText);
         if (!frame.runId) return;
         const runId = frame.runId;
         activeRunIdRef.current = runId;
         updateRunActivities(runId, (current) => upsertStatusActivity(current, {
           runId,
-          text: frame.status,
+          text: statusText,
           status: "running",
           mcpServers: frame.mcpServers,
         }));
@@ -354,6 +355,12 @@ function toolStatusLabel(tool: ToolFrame): string {
   if (tool.phase === "start") return `Running ${name}`;
   if (tool.phase === "error" || tool.isError) return `${name} failed`;
   return `${name} completed`;
+}
+
+function formatRunStatus(frame: Extract<ServerFrame, { type: "run.status" }>): string {
+  if (frame.status !== "api_error") return frame.status;
+  const retry = frame.retryAttempt && frame.maxRetries ? ` ${frame.retryAttempt}/${frame.maxRetries}` : "";
+  return `API retry${retry}: ${frame.message || "request failed"}`;
 }
 
 function appendAssistantDelta(messages: ThreadMessage[], id: string, delta: string): ThreadMessage[] {

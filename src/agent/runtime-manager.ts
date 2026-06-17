@@ -2,12 +2,13 @@ import type { SDKUserMessage, SessionStore } from "@anthropic-ai/claude-agent-sd
 import type { RuntimeConfig } from "../config/schema.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import type { ToolContextRef } from "../tools/types.ts";
+import type { WebuiMcpSessionStatus } from "../shared/webui-protocol.ts";
 import { createClaudebotSdkMcpServer } from "../tools/sdk-mcp-server.ts";
 import { buildSystemPrompt, type PromptInputs } from "./prompt.ts";
 import { buildBaseSdkOptions } from "./sdk-options.ts";
 import { createAsyncInputQueue, type AsyncInputQueue } from "./input-queue.ts";
 import { normalizeSdkMessage } from "./runner.ts";
-import type { NormalizedEvent, SdkMessage } from "./events.ts";
+import type { McpServerStatus, NormalizedEvent, SdkMessage } from "./events.ts";
 
 export type RuntimeStatus = "idle" | "running" | "cancelling" | "failed" | "closed";
 
@@ -15,6 +16,8 @@ export type AgentRuntimeQuery = {
   stream: AsyncIterable<unknown>;
   interrupt(): Promise<void>;
   close(): void;
+  mcpServerStatus?(): Promise<McpServerStatus[]>;
+  reconnectMcpServer?(serverName: string): Promise<void>;
 };
 
 export type AgentRuntimeQueryFactory = (args: {
@@ -43,6 +46,8 @@ type AgentRuntime = {
   waiters: Array<(event: NormalizedEvent) => void>;
   lastUsedAt: number;
 };
+
+export type AgentRuntimeMcpStatus = WebuiMcpSessionStatus;
 
 export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
   const runtimes = new Map<string, AgentRuntime>();
@@ -170,6 +175,27 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
     await runtime.query.interrupt();
   }
 
+  async function mcpServerStatus(sessionId: string): Promise<AgentRuntimeMcpStatus> {
+    const runtime = runtimes.get(sessionId);
+    if (!runtime || runtime.status === "closed") {
+      return { sessionId, runtimeStatus: "not_started", servers: [] };
+    }
+    if (!runtime.query.mcpServerStatus) throw new Error("MCP status not supported by this runtime");
+    return {
+      sessionId,
+      runtimeStatus: runtime.status,
+      servers: await runtime.query.mcpServerStatus(),
+    };
+  }
+
+  async function reconnectMcpServer(sessionId: string, serverName: string): Promise<AgentRuntimeMcpStatus> {
+    const runtime = runtimes.get(sessionId);
+    if (!runtime || runtime.status === "closed") throw new Error(`session runtime not started: ${sessionId}`);
+    if (!runtime.query.reconnectMcpServer) throw new Error("MCP reconnect not supported by this runtime");
+    await runtime.query.reconnectMcpServer(serverName);
+    return mcpServerStatus(sessionId);
+  }
+
   function closeSession(sessionId: string): void {
     const runtime = runtimes.get(sessionId);
     if (!runtime) return;
@@ -203,6 +229,8 @@ export function createAgentRuntimeManager(deps: AgentRuntimeManagerDeps) {
   return {
     runTurn,
     cancel,
+    mcpServerStatus,
+    reconnectMcpServer,
     closeSession,
     closeIdle,
     closeAll,
@@ -221,6 +249,8 @@ function createRealRuntimeQueryFactory(): AgentRuntimeQueryFactory {
       stream: sdkQuery,
       interrupt: () => sdkQuery.interrupt(),
       close: () => sdkQuery.close(),
+      mcpServerStatus: () => sdkQuery.mcpServerStatus(),
+      reconnectMcpServer: (serverName: string) => sdkQuery.reconnectMcpServer(serverName),
     };
   };
 }

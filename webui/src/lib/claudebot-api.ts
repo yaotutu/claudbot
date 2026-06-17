@@ -9,6 +9,8 @@ import type {
   ThreadMessage,
   UpdateSchedulePayload,
   WebuiBootstrap,
+  WebuiMcpConfig,
+  WebuiMcpSessionStatus,
 } from "./claudebot-types";
 
 export class ClaudebotApiError extends Error {
@@ -47,6 +49,18 @@ export async function fetchBootstrap(base = ""): Promise<WebuiBootstrap> {
 
 export async function fetchRuntime(base = ""): Promise<RuntimeInfo> {
   return request<RuntimeInfo>(`${base}/api/runtime`);
+}
+
+export async function fetchMcpConfig(base = ""): Promise<WebuiMcpConfig> {
+  return request<WebuiMcpConfig>(`${base}/api/mcp`);
+}
+
+export async function fetchSessionMcpStatus(sessionId: string, base = ""): Promise<WebuiMcpSessionStatus> {
+  return request<WebuiMcpSessionStatus>(`${base}/api/sessions/${encodeURIComponent(sessionId)}/mcp`);
+}
+
+export async function reconnectMcpServer(sessionId: string, serverName: string, base = ""): Promise<WebuiMcpSessionStatus> {
+  return request<WebuiMcpSessionStatus>(`${base}/api/sessions/${encodeURIComponent(sessionId)}/mcp/${encodeURIComponent(serverName)}/reconnect`, { method: "POST" });
 }
 
 export async function listSessions(base = ""): Promise<SessionSummary[]> {

@@ -330,6 +330,34 @@ describe("claude runner normalization", () => {
       mcpServers: [{ name: "filesystem", status: "connected" }],
     });
   });
+
+  test("system api_error forwards retry status", async () => {
+    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([
+      {
+        type: "system",
+        subtype: "api_error",
+        session_id: "sess_retry",
+        error: {
+          formatted: "529 [1305][overloaded]",
+          status: 529,
+        },
+        retryAttempt: 2,
+        maxRetries: 10,
+        retryInMs: 1200,
+      },
+    ]));
+    const events = await collectEvents(runner.run({ prompt: "hi" }));
+    expect(events).toContainEqual({
+      type: "status",
+      status: "api_error",
+      sessionId: "sess_retry",
+      message: "529 [1305][overloaded]",
+      retryAttempt: 2,
+      maxRetries: 10,
+      retryInMs: 1200,
+    });
+  });
 });
 
 describe("makeRealQueryFactory", () => {

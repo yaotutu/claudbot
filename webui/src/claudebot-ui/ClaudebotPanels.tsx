@@ -3,15 +3,17 @@ import { X } from "lucide-react";
 import type { RuntimeInfo } from "@/lib/claudebot-types";
 import { cn } from "@/lib/utils";
 
+import { McpPanel } from "./McpPanel";
 import type { ClaudebotUtilityPanel } from "./types";
 
 type ClaudebotPanelsProps = {
   panel: Exclude<ClaudebotUtilityPanel, "tasks" | null>;
   runtime: RuntimeInfo;
+  activeSessionId: string | null;
   onClose: () => void;
 };
 
-export function ClaudebotPanels({ panel, runtime, onClose }: ClaudebotPanelsProps) {
+export function ClaudebotPanels({ panel, runtime, activeSessionId, onClose }: ClaudebotPanelsProps) {
   return (
     <div className="absolute inset-y-4 right-4 z-40 flex w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl">
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 px-4">
@@ -28,7 +30,7 @@ export function ClaudebotPanels({ panel, runtime, onClose }: ClaudebotPanelsProp
       <div className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
         {panel === "settings" ? <SettingsPanel runtime={runtime} /> : null}
         {panel === "search" ? <PlaceholderPanel title="Search" body="会话搜索暂未接入。当前迁移阶段先复用 Nanobot 的入口和反馈，再按 Claudebot 原生协议补搜索索引。" /> : null}
-        {panel === "skills" ? <PlaceholderPanel title="Skills" body="技能目录暂未接入。后续只会通过 Claudebot 原生 API 暴露 skills，不兼容 Nanobot 的旧接口。" /> : null}
+        {panel === "skills" ? <McpPanel activeSessionId={activeSessionId} /> : null}
       </div>
     </div>
   );

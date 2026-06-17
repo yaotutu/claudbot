@@ -3,6 +3,7 @@
 import type { ServiceContainer } from "../runtime/services.ts";
 import type { AgentFileName } from "../agent/profile.ts";
 import type { ChannelRegistry } from "../channels/registry.ts";
+import { hasConfiguredMcpServer, summarizeMcpConfig } from "../mcp/status.ts";
 
 export type HttpResult = {
   status: number;
@@ -51,6 +52,10 @@ export async function handleHttp(
       return json(200, runtimeInfo(services));
     }
 
+    if (path === "/api/mcp" && method === "GET") {
+      return json(200, summarizeMcpConfig(services.config));
+    }
+
     if (path === "/api/notifications" && method === "GET") {
       const notifications = await services.notificationStore.list();
       return json(200, notifications.slice().reverse());
@@ -85,6 +90,23 @@ export async function handleHttp(
       if (sub === "/activate" && method === "POST") {
         const activeId = await services.sessions.activate(id);
         return json(200, { activeSessionId: activeId });
+      }
+      if (sub === "/mcp" && method === "GET") {
+        return json(200, await services.agentRuntimeManager.mcpServerStatus(id));
+      }
+      const mcpReconnectMatch = sub.match(/^\/mcp\/([A-Za-z0-9_.-]+)\/reconnect$/);
+      if (mcpReconnectMatch && method === "POST") {
+        const serverName = decodeURIComponent(mcpReconnectMatch[1]);
+        if (!hasConfiguredMcpServer(services.config, serverName)) {
+          return json(404, { error: `unknown MCP server: ${serverName}` });
+        }
+        try {
+          return json(200, await services.agentRuntimeManager.reconnectMcpServer(id, serverName));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("runtime not started")) return json(409, { error: msg });
+          return json(400, { error: msg });
+        }
       }
     }
 

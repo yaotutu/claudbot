@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Sparkles } from "lucide-react";
 
-export function ThreadArea({ messages, loading, streaming, disabled, onSend, onNewChat, hasSession }: {
+export function ThreadArea({ messages, loading, streaming, streamStatus, disabled, onSend, onNewChat, hasSession }: {
   messages: Array<{ id: string; role: string; content: string }>;
   loading: boolean;
   streaming: boolean;
+  streamStatus?: string | null;
   disabled: boolean;
   onSend: (content: string) => void;
   onNewChat: () => void;
@@ -34,7 +35,7 @@ export function ThreadArea({ messages, loading, streaming, disabled, onSend, onN
                 {message.content}
               </div>
             ))}
-            {streaming ? <div className="text-sm text-muted-foreground">Streaming...</div> : null}
+            {streaming ? <div className="text-sm text-muted-foreground">{streamStatus ?? "Streaming..."}</div> : null}
           </div>
         )}
       </div>

@@ -170,4 +170,66 @@ describe("AgentRuntimeManager", () => {
     expect(streamed).toContain("turn_done");
     expect(result.events.map((event) => String(event.type))).toEqual(streamed);
   });
+
+  test("reports MCP status for an active runtime", async () => {
+    const queryFactory: AgentRuntimeQueryFactory = async ({ input }) => ({
+      stream: respondToInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+      mcpServerStatus: async () => [{ name: "filesystem", status: "connected" }],
+      reconnectMcpServer: async () => undefined,
+    });
+    const manager = makeManager(queryFactory);
+    await manager.runTurn({ sessionId: "s1", content: "one", resumeSessionId: "s1" });
+
+    const status = await manager.mcpServerStatus("s1");
+
+    expect(status).toEqual({
+      sessionId: "s1",
+      runtimeStatus: "idle",
+      servers: [{ name: "filesystem", status: "connected" }],
+    });
+  });
+
+  test("reports not_started when MCP status is requested before runtime creation", async () => {
+    const manager = makeManager(async ({ input }) => ({
+      stream: respondToInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+    }));
+
+    await expect(manager.mcpServerStatus("missing-session")).resolves.toEqual({
+      sessionId: "missing-session",
+      runtimeStatus: "not_started",
+      servers: [],
+    });
+  });
+
+  test("reconnects MCP server through the matching active runtime", async () => {
+    const reconnected: string[] = [];
+    const queryFactory: AgentRuntimeQueryFactory = async ({ input }) => ({
+      stream: respondToInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+      mcpServerStatus: async () => [{ name: "filesystem", status: "connected" }],
+      reconnectMcpServer: async (serverName: string) => { reconnected.push(serverName); },
+    });
+    const manager = makeManager(queryFactory);
+    await manager.runTurn({ sessionId: "s1", content: "one", resumeSessionId: "s1" });
+
+    const status = await manager.reconnectMcpServer("s1", "filesystem");
+
+    expect(reconnected).toEqual(["filesystem"]);
+    expect(status.servers).toEqual([{ name: "filesystem", status: "connected" }]);
+  });
+
+  test("rejects MCP reconnect before runtime creation", async () => {
+    const manager = makeManager(async ({ input }) => ({
+      stream: respondToInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+    }));
+
+    await expect(manager.reconnectMcpServer("missing-session", "filesystem")).rejects.toThrow(/runtime not started/);
+  });
 });

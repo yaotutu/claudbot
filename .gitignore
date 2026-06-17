@@ -8,3 +8,6 @@ dist/
 # Stray Bun writeJsonAtomic temp files (the pid prefix prevents globbing by
 # the more obvious patterns above).
 .*.tmp
+
+# worktree-local dev runtime state (ports, screenshots, logs)
+.claudebot-local/

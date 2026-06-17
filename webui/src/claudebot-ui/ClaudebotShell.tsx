@@ -105,7 +105,7 @@ export function ClaudebotShell({
         />
         {panel === "tasks" ? tasksPanel : null}
         {panel && panel !== "tasks" ? (
-          <ClaudebotPanels panel={panel} runtime={runtime} onClose={() => onPanelChange(null)} />
+          <ClaudebotPanels panel={panel} runtime={runtime} activeSessionId={activeSessionId} onClose={() => onPanelChange(null)} />
         ) : null}
         {notificationToast}
       </div>

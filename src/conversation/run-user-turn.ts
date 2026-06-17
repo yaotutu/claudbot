@@ -302,7 +302,17 @@ async function forwardNative(
       await send({ type: "run.error", sessionId, runId, message: ev.message });
       break;
     case "status":
-      await send({ type: "run.status", sessionId, runId, status: ev.status, mcpServers: ev.mcpServers });
+      await send({
+        type: "run.status",
+        sessionId,
+        runId,
+        status: ev.status,
+        mcpServers: ev.mcpServers,
+        message: ev.message,
+        retryAttempt: ev.retryAttempt,
+        maxRetries: ev.maxRetries,
+        retryInMs: ev.retryInMs,
+      });
       break;
     case "turn_done":
       break;

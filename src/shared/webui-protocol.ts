@@ -79,10 +79,33 @@ export type ToolFrame = {
   isError?: boolean;
 };
 
+export type WebuiMcpServerConfig = {
+  name: string;
+  type: "stdio" | "sse" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  timeout?: number;
+  alwaysLoad?: boolean;
+  envKeys?: string[];
+  headerKeys?: string[];
+};
+
+export type WebuiMcpConfig = {
+  strict: boolean;
+  servers: WebuiMcpServerConfig[];
+};
+
 export type RuntimeMcpServerStatus = {
   name: string;
   status: string;
   [key: string]: unknown;
+};
+
+export type WebuiMcpSessionStatus = {
+  sessionId: string;
+  runtimeStatus: "idle" | "running" | "cancelling" | "failed" | "closed" | "not_started";
+  servers: RuntimeMcpServerStatus[];
 };
 
 export type ThreadActivityStatus = "running" | "complete" | "error";
@@ -131,7 +154,17 @@ export type ServerFrame =
   | { type: "run.delta"; sessionId: string; runId: string; text: string }
   | { type: "run.thinking"; sessionId: string; runId: string; text: string }
   | { type: "run.tool"; sessionId: string; runId: string; tool: ToolFrame }
-  | { type: "run.status"; sessionId?: string; runId?: string; status: string; mcpServers?: RuntimeMcpServerStatus[] }
+  | {
+      type: "run.status";
+      sessionId?: string;
+      runId?: string;
+      status: string;
+      mcpServers?: RuntimeMcpServerStatus[];
+      message?: string;
+      retryAttempt?: number;
+      maxRetries?: number;
+      retryInMs?: number;
+    }
   | { type: "run.completed"; sessionId: string; runId: string; isError: boolean; result?: string; totalCostUsd?: number }
   | { type: "run.error"; sessionId?: string; runId?: string; message: string }
   | { type: "schedule.updated"; schedule: ScheduleRecord }

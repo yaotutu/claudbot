@@ -8,6 +8,7 @@ import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { runtimePaths } from "../src/config/paths.ts";
 import { handleHttp } from "../src/gateway/http.ts";
 import type { QueryFactory } from "../src/agent/runner.ts";
+import type { AgentRuntimeQueryFactory } from "../src/agent/runtime-manager.ts";
 import type { SdkMessage } from "../src/agent/events.ts";
 import { readFileSync } from "node:fs";
 import { appendSessionJsonlEntry } from "../src/sessions/jsonl-store.ts";
@@ -27,6 +28,24 @@ async function makeServices(queryFactory: QueryFactory) {
   const paths = runtimePaths(config);
   const services = await buildServices({ config, paths, queryFactory });
   return { services, dir };
+}
+
+async function makeServicesWithConfig(input: Parameters<typeof resolveRuntimeConfig>[0], deps: {
+  queryFactory?: QueryFactory;
+  agentRuntimeQueryFactory?: AgentRuntimeQueryFactory;
+} = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "claudebot-gw-"));
+  const config = resolveRuntimeConfig({ home: dir, ...input }, {});
+  const paths = runtimePaths(config);
+  const services = await buildServices({ config, paths, queryFactory: deps.queryFactory, agentRuntimeQueryFactory: deps.agentRuntimeQueryFactory });
+  return { services, dir };
+}
+
+async function* respondRuntimeInput(input: AsyncIterable<unknown>, sessionId: string) {
+  for await (const _message of input) {
+    yield { type: "system", subtype: "init", session_id: sessionId };
+    yield { type: "result", session_id: sessionId, result: "ok", is_error: false };
+  }
 }
 
 describe("gateway HTTP", () => {
@@ -154,6 +173,160 @@ describe("gateway HTTP", () => {
       providerModel: "",
       permissionMode: "bypassPermissions",
     });
+  });
+
+  test("GET /api/mcp returns sanitized MCP config", async () => {
+    const { services } = await makeServicesWithConfig({
+      mcp: {
+        strict: false,
+        servers: {
+          filesystem: {
+            type: "stdio",
+            command: "node",
+            args: ["server.js", "/tmp/project"],
+            env: { SECRET_TOKEN: "secret-value" },
+            timeout: 30000,
+            alwaysLoad: true,
+          },
+          docs: {
+            type: "http",
+            url: "https://docs.example.com/mcp",
+            headers: { Authorization: "Bearer private-token" },
+          },
+        },
+      },
+    });
+
+    const res = await handleHttp(new Request("http://x/api/mcp"), new URL("http://x/api/mcp"), services);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      strict: boolean;
+      servers: Array<Record<string, unknown>>;
+    };
+    expect(body.strict).toBe(false);
+    expect(body.servers).toContainEqual({
+      name: "filesystem",
+      type: "stdio",
+      command: "node",
+      args: ["server.js", "/tmp/project"],
+      envKeys: ["SECRET_TOKEN"],
+      timeout: 30000,
+      alwaysLoad: true,
+    });
+    expect(body.servers).toContainEqual({
+      name: "docs",
+      type: "http",
+      url: "https://docs.example.com/mcp",
+      headerKeys: ["Authorization"],
+    });
+    expect(JSON.stringify(body)).not.toContain("secret-value");
+    expect(JSON.stringify(body)).not.toContain("private-token");
+  });
+
+  test("GET /api/sessions/:id/mcp returns not_started before runtime creation", async () => {
+    const { services } = await makeServicesWithConfig({
+      mcp: {
+        servers: {
+          filesystem: { type: "stdio", command: "node", args: ["server.js"] },
+        },
+      },
+    });
+
+    const res = await handleHttp(new Request("http://x/api/sessions/s1/mcp"), new URL("http://x/api/sessions/s1/mcp"), services);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      sessionId: "s1",
+      runtimeStatus: "not_started",
+      servers: [],
+    });
+  });
+
+  test("GET /api/sessions/:id/mcp returns active runtime MCP status", async () => {
+    const factory: AgentRuntimeQueryFactory = async ({ input }) => ({
+      stream: respondRuntimeInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+      mcpServerStatus: async () => [{ name: "filesystem", status: "connected" }],
+      reconnectMcpServer: async () => undefined,
+    });
+    const { services } = await makeServicesWithConfig({
+      mcp: {
+        servers: {
+          filesystem: { type: "stdio", command: "node", args: ["server.js"] },
+        },
+      },
+    }, { agentRuntimeQueryFactory: factory });
+    await services.agentRuntimeManager.runTurn({ sessionId: "s1", content: "hi", resumeSessionId: "s1" });
+
+    const res = await handleHttp(new Request("http://x/api/sessions/s1/mcp"), new URL("http://x/api/sessions/s1/mcp"), services);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      sessionId: "s1",
+      runtimeStatus: "idle",
+      servers: [{ name: "filesystem", status: "connected" }],
+    });
+  });
+
+  test("POST /api/sessions/:id/mcp/:server/reconnect reconnects configured MCP server", async () => {
+    const reconnects: string[] = [];
+    const factory: AgentRuntimeQueryFactory = async ({ input }) => ({
+      stream: respondRuntimeInput(input, "s1"),
+      interrupt: async () => undefined,
+      close: () => undefined,
+      mcpServerStatus: async () => [{ name: "filesystem", status: "connected" }],
+      reconnectMcpServer: async (serverName: string) => { reconnects.push(serverName); },
+    });
+    const { services } = await makeServicesWithConfig({
+      mcp: {
+        servers: {
+          filesystem: { type: "stdio", command: "node", args: ["server.js"] },
+        },
+      },
+    }, { agentRuntimeQueryFactory: factory });
+    await services.agentRuntimeManager.runTurn({ sessionId: "s1", content: "hi", resumeSessionId: "s1" });
+
+    const res = await handleHttp(
+      new Request("http://x/api/sessions/s1/mcp/filesystem/reconnect", { method: "POST" }),
+      new URL("http://x/api/sessions/s1/mcp/filesystem/reconnect"),
+      services,
+    );
+
+    expect(res.status).toBe(200);
+    expect(reconnects).toEqual(["filesystem"]);
+    expect(await res.json()).toEqual({
+      sessionId: "s1",
+      runtimeStatus: "idle",
+      servers: [{ name: "filesystem", status: "connected" }],
+    });
+  });
+
+  test("POST /api/sessions/:id/mcp/:server/reconnect rejects unknown server and missing runtime", async () => {
+    const { services } = await makeServicesWithConfig({
+      mcp: {
+        servers: {
+          filesystem: { type: "stdio", command: "node", args: ["server.js"] },
+        },
+      },
+    });
+
+    const unknown = await handleHttp(
+      new Request("http://x/api/sessions/s1/mcp/search/reconnect", { method: "POST" }),
+      new URL("http://x/api/sessions/s1/mcp/search/reconnect"),
+      services,
+    );
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "unknown MCP server: search" });
+
+    const missingRuntime = await handleHttp(
+      new Request("http://x/api/sessions/s1/mcp/filesystem/reconnect", { method: "POST" }),
+      new URL("http://x/api/sessions/s1/mcp/filesystem/reconnect"),
+      services,
+    );
+    expect(missingRuntime.status).toBe(409);
+    expect(await missingRuntime.json()).toEqual({ error: "session runtime not started: s1" });
   });
 
   test("GET /api/notifications returns newest WebUI delivery records first", async () => {
@@ -480,6 +653,44 @@ describe("runUserTurn", () => {
 
     const status = sent.find((m) => (m as { type: string }).type === "run.status") as { mcpServers?: Array<{ name: string; status: string }> } | undefined;
     expect(status?.mcpServers).toEqual([{ name: "filesystem", status: "connected" }]);
+  });
+
+  test("forwards SDK api retry status as run.status", async () => {
+    const apiError = {
+      type: "system",
+      subtype: "api_error",
+      session_id: "sess_retry",
+      error: { formatted: "529 overloaded" },
+      retryAttempt: 3,
+      maxRetries: 10,
+      retryInMs: 2500,
+    } as SdkMessage;
+    const result = JSON.parse(readFileSync("tests/fixtures/sdk-events/07-result-success.json", "utf8")) as SdkMessage;
+    const factory = makeRecordingQueryFactory([apiError, result]);
+    const { services } = await makeServices(factory);
+
+    const sent: unknown[] = [];
+    const { runUserTurn } = await import("../src/conversation/run-user-turn.ts");
+    await runUserTurn(
+      services,
+      { source: "webui", sessionId: null, content: "hi" },
+      { send: (event) => { sent.push(event); } },
+    );
+
+    const status = sent.find((m) => (m as { type: string }).type === "run.status") as {
+      status?: string;
+      message?: string;
+      retryAttempt?: number;
+      maxRetries?: number;
+      retryInMs?: number;
+    } | undefined;
+    expect(status).toMatchObject({
+      status: "api_error",
+      message: "529 overloaded",
+      retryAttempt: 3,
+      maxRetries: 10,
+      retryInMs: 2500,
+    });
   });
 });
 

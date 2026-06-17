@@ -6,11 +6,14 @@ import {
   fetchBootstrap,
   fetchRuntime,
   fetchNotifications,
+  fetchMcpConfig,
   fetchScheduleRuns,
+  fetchSessionMcpStatus,
   fetchThreadMessages,
   listSchedules,
   listSessions,
   markNotificationsRead,
+  reconnectMcpServer,
   runScheduleNow,
   updateSchedule,
 } from "@/lib/claudebot-api";
@@ -124,6 +127,66 @@ describe("claudebot native API client", () => {
     expect(runtime.workspace).toBe("/w");
     expect(runtime.gateway.port).toBe(18790);
     expect(runtime.providerModel).toBe("glm-4.7");
+  });
+
+  it("reads MCP configuration, session status, and reconnects configured servers", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET" });
+      if (String(url) === "/api/mcp") {
+        return jsonResponse({
+          strict: true,
+          servers: [
+            {
+              name: "filesystem",
+              type: "stdio",
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem"],
+              timeout: 5000,
+              alwaysLoad: true,
+              envKeys: ["MCP_TOKEN"],
+            },
+            {
+              name: "docs",
+              type: "http",
+              url: "https://mcp.example.com",
+              headerKeys: ["Authorization"],
+            },
+          ],
+        });
+      }
+      if (String(url) === "/api/sessions/s1/mcp" && !init?.method) {
+        return jsonResponse({
+          sessionId: "s1",
+          runtimeStatus: "running",
+          servers: [{ name: "filesystem", status: "connected", tools: ["read_file"] }],
+        });
+      }
+      if (String(url) === "/api/sessions/s1/mcp/filesystem/reconnect" && init?.method === "POST") {
+        return jsonResponse({
+          sessionId: "s1",
+          runtimeStatus: "running",
+          servers: [{ name: "filesystem", status: "connected", tools: ["read_file"] }],
+        });
+      }
+      return jsonResponse({}, 404);
+    }));
+
+    const config = await fetchMcpConfig();
+    const status = await fetchSessionMcpStatus("s1");
+    const reconnected = await reconnectMcpServer("s1", "filesystem");
+
+    expect(config.strict).toBe(true);
+    expect(config.servers[0]).toMatchObject({ name: "filesystem", type: "stdio", envKeys: ["MCP_TOKEN"] });
+    expect(config.servers[1]).toMatchObject({ name: "docs", type: "http", headerKeys: ["Authorization"] });
+    expect(JSON.stringify(config)).not.toContain("secret");
+    expect(status.runtimeStatus).toBe("running");
+    expect(reconnected.servers[0]?.status).toBe("connected");
+    expect(calls).toEqual([
+      { method: "GET", url: "/api/mcp" },
+      { method: "GET", url: "/api/sessions/s1/mcp" },
+      { method: "POST", url: "/api/sessions/s1/mcp/filesystem/reconnect" },
+    ]);
   });
 
   it("fetchThreadMessages reads native thread messages", async () => {

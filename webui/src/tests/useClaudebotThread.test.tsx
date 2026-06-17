@@ -354,4 +354,48 @@ describe("useClaudebotThread", () => {
     expect(result.current.runStatus).toBeNull();
     expect(result.current.activities).toEqual([]);
   });
+
+  it("shows api retry status as run status activity while streaming", async () => {
+    const client = makeClient();
+    const fetchMessages = vi.fn(async () => []);
+    const { result } = renderHook(() => useClaudebotThread({
+      sessionId: "s1",
+      sessionStatus: "draft",
+      client,
+      fetchMessages,
+    }));
+
+    await waitFor(() => expect(client.frameHandlerCount()).toBe(1));
+
+    act(() => {
+      client.emit({ type: "run.started", sessionId: "s1", runId: "r1" });
+      client.emit({
+        type: "run.status",
+        sessionId: "s1",
+        runId: "r1",
+        status: "api_error",
+        message: "529 overloaded",
+        retryAttempt: 2,
+        maxRetries: 10,
+      });
+    });
+
+    expect(result.current.streaming).toBe(true);
+    expect(result.current.runStatus).toBe("API retry 2/10: 529 overloaded");
+    expect(result.current.activities).toEqual([
+      expect.objectContaining({
+        id: "status-r1",
+        kind: "status",
+        text: "API retry 2/10: 529 overloaded",
+        status: "running",
+      }),
+    ]);
+
+    act(() => {
+      client.emit({ type: "run.completed", sessionId: "s1", runId: "r1", isError: false });
+    });
+
+    expect(result.current.runStatus).toBe(null);
+    expect(result.current.activities).toEqual([]);
+  });
 });

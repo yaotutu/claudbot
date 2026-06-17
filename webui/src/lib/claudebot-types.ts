@@ -19,4 +19,7 @@ export type {
   ToolFrame,
   UpdateSchedulePayload,
   WebuiBootstrap,
+  WebuiMcpConfig,
+  WebuiMcpServerConfig,
+  WebuiMcpSessionStatus,
 } from "../../../src/shared/webui-protocol.ts";

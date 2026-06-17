@@ -145,10 +145,21 @@ export function normalizeSdkMessage(msg: SdkMessage, fallbackSessionId?: string)
     case "system": {
       if (msg.subtype === "thinking_tokens") return []; // noisy; ignore
       if (msg.subtype === "init") return [{ type: "status", status: "session_init", sessionId: sid, mcpServers: msg.mcp_servers }];
+      if (msg.subtype === "api_error") {
+        return [{
+          type: "status",
+          status: "api_error",
+          sessionId: sid,
+          message: formatSdkError(msg.error),
+          retryAttempt: msg.retryAttempt,
+          maxRetries: msg.maxRetries,
+          retryInMs: msg.retryInMs,
+        }];
+      }
       return [];
     }
     case "error": {
-      return [{ type: "error", message: msg.error || "unknown error", sessionId: sid }];
+      return [{ type: "error", message: formatSdkError(msg.error), sessionId: sid }];
     }
     default:
       return [];
@@ -160,4 +171,10 @@ function assistantContentToEvent(c: AssistantContent | UserContent, sid?: string
   if (c.type === "thinking") return [{ type: "thinking_delta", thinking: c.thinking, sessionId: sid }];
   if (c.type === "tool_use") return [{ type: "tool_start", id: c.id, name: c.name, input: c.input, sessionId: sid }];
   return [];
+}
+
+function formatSdkError(error: SdkMessage["error"]): string {
+  if (!error) return "unknown error";
+  if (typeof error === "string") return error;
+  return error.formatted || error.message || JSON.stringify(error);
 }

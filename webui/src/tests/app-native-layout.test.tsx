@@ -14,6 +14,9 @@ let bootstrapPayload: WebuiBootstrap;
 let threadRows: ThreadMessage[];
 let scheduleRows: Array<Record<string, unknown>>;
 let notificationRows: Array<Record<string, unknown>>;
+let mcpConfigPayload: { strict: boolean; servers: Array<Record<string, unknown>> };
+let mcpStatusPayload: { sessionId: string; runtimeStatus: string; servers: Array<Record<string, unknown>> };
+let mcpReconnectCalls: Array<{ sessionId: string; serverName: string }>;
 
 function persistedBootstrap(): WebuiBootstrap {
   return {
@@ -62,6 +65,12 @@ function persistedActivities(runId: string, thinking: string, toolName = "mcp__c
 vi.mock("@/lib/claudebot-api", () => ({
   fetchBootstrap: vi.fn(async () => bootstrapPayload),
   fetchThreadMessages: vi.fn(async () => threadRows),
+  fetchMcpConfig: vi.fn(async () => mcpConfigPayload),
+  fetchSessionMcpStatus: vi.fn(async (sessionId: string) => ({ ...mcpStatusPayload, sessionId })),
+  reconnectMcpServer: vi.fn(async (sessionId: string, serverName: string) => {
+    mcpReconnectCalls.push({ sessionId, serverName });
+    return { ...mcpStatusPayload, sessionId };
+  }),
   listSchedules: vi.fn(async () => scheduleRows),
   fetchNotifications: vi.fn(async () => notificationRows),
   markNotificationsRead: vi.fn(async () => 1),
@@ -98,6 +107,35 @@ describe("App native layout", () => {
     threadRows = [{ id: "m1", role: "user", content: "hello", createdAt: "2026-06-10T09:59:40.000Z", metadata: {} }];
     scheduleRows = [{ id: "sch_1", name: "daily", enabled: true, kind: "cron", cronExpr: "* * * * *", at: null, everyMs: null, timezone: "UTC", message: "check", deleteAfterRun: false, state: { nextRunAt: "2026-06-11T00:00:00.000Z", lastRunAt: null, lastStatus: "succeeded", lastError: null, runCount: 1, running: false, runningStartedAt: null, lastSkippedReason: null }, createdAt: "2026-06-11T00:00:00.000Z", updatedAt: "2026-06-11T00:00:00.000Z" }];
     notificationRows = [{ id: "notif_1", source: "schedule", title: "定时任务 daily", content: "ok", status: "succeeded", scheduleId: "sch_1", runId: "run_1", delivery: { type: "webui_inbox", scope: "global" }, createdAt: "2026-06-11T00:00:01.000Z", readAt: null }];
+    mcpConfigPayload = {
+      strict: true,
+      servers: [
+        {
+          name: "filesystem",
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem"],
+          envKeys: ["MCP_TOKEN"],
+          timeout: 5000,
+          alwaysLoad: true,
+        },
+        {
+          name: "docs",
+          type: "http",
+          url: "https://mcp.example.com",
+          headerKeys: ["Authorization"],
+        },
+      ],
+    };
+    mcpStatusPayload = {
+      sessionId: "s1",
+      runtimeStatus: "running",
+      servers: [
+        { name: "filesystem", status: "connected", tools: ["read_file", "write_file"] },
+        { name: "docs", status: "failed" },
+      ],
+    };
+    mcpReconnectCalls = [];
     frameHandlers.clear();
     sendMessage.mockClear();
     cancel.mockClear();
@@ -134,7 +172,15 @@ describe("App native layout", () => {
     expect(await screen.findByText(/会话搜索暂未接入/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Skills" }));
-    expect(await screen.findByText(/技能目录暂未接入/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "MCP servers" })).toBeInTheDocument();
+    expect(screen.getByText("filesystem")).toBeInTheDocument();
+    expect(screen.getByText("docs")).toBeInTheDocument();
+    expect(screen.getByText("MCP_TOKEN")).toBeInTheDocument();
+    expect(screen.getByText("Authorization")).toBeInTheDocument();
+    expect(screen.getByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("write_file")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect filesystem" }));
+    await waitFor(() => expect(mcpReconnectCalls).toEqual([{ sessionId: "s1", serverName: "filesystem" }]));
 
     fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
     expect(await screen.findByRole("heading", { name: "定时任务" })).toBeInTheDocument();
