@@ -41,47 +41,7 @@ export function formatModelLabel(model: string, providerModel: string): string {
 
 function activitiesFromMetadata(message: ThreadMessage): ThreadActivity[] {
   const metadataActivities = message.metadata?.activities;
-  if (Array.isArray(metadataActivities)) {
-    return metadataActivities.filter(isThreadActivity);
-  }
-
-  const runId = typeof message.metadata?.runId === "string" ? message.metadata.runId : message.id;
-  const activities: ThreadActivity[] = [];
-  if (typeof message.metadata?.thinking === "string" && message.metadata.thinking.trim()) {
-    const timestamp = message.createdAt;
-    activities.push({
-      id: `thinking-${runId}`,
-      kind: "thinking",
-      runId,
-      text: message.metadata.thinking,
-      status: "complete",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-  }
-
-  const toolCalls = message.metadata?.toolCalls;
-  if (Array.isArray(toolCalls)) {
-    for (const tool of toolCalls) {
-      const toolId = readStringField(tool, "id");
-      const name = readStringField(tool, "name") || "Tool";
-      const timestamp = message.createdAt;
-      activities.push({
-        id: `tool-${toolId || `${runId}-${activities.length}`}`,
-        kind: "tool",
-        runId,
-        toolId: toolId || `${runId}-${activities.length}`,
-        name,
-        phase: "end",
-        input: readUnknownField(tool, "input"),
-        status: "complete",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      });
-    }
-  }
-
-  return activities;
+  return Array.isArray(metadataActivities) ? metadataActivities.filter(isThreadActivity) : [];
 }
 
 function isThreadActivity(value: unknown): value is ThreadActivity {
@@ -91,15 +51,4 @@ function isThreadActivity(value: unknown): value is ThreadActivity {
   return typeof activity.id === "string"
     && (activity.kind === "thinking" || activity.kind === "tool" || activity.kind === "status")
     && (status === "running" || status === "complete" || status === "error");
-}
-
-function readStringField(value: unknown, field: string): string {
-  if (!value || typeof value !== "object") return "";
-  const current = (value as Record<string, unknown>)[field];
-  return typeof current === "string" ? current : "";
-}
-
-function readUnknownField(value: unknown, field: string): unknown {
-  if (!value || typeof value !== "object") return undefined;
-  return (value as Record<string, unknown>)[field];
 }

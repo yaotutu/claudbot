@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { RuntimeStateStore } from "../runtime/state.ts";
+import { createRuntimeStateStore, type RuntimeStateStore } from "../runtime/state.ts";
 import { appendSessionJsonlEntry, readSessionJsonl } from "./jsonl-store.ts";
 import { createSessionService } from "./session-service.ts";
 
@@ -13,7 +13,7 @@ describe("session service", () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "claudebot-session-service-"));
-    state = new RuntimeStateStore(join(dir, "runtime-state.json"));
+    state = createRuntimeStateStore(join(dir, "runtime-state.json"));
   });
 
   test("clearStaleActiveSession clears runtime state when main.jsonl is missing", async () => {

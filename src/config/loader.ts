@@ -76,7 +76,7 @@ function starterConfig(home: string): RuntimeConfigInput {
         botToken: "",
         webhookPath: "/channels/telegram/webhook",
         secretToken: "",
-        allowedChatIds: [],
+        allowFrom: [],
       },
       feishu: {
         enabled: false,
@@ -85,7 +85,7 @@ function starterConfig(home: string): RuntimeConfigInput {
         verificationToken: "",
         encryptKey: "",
         webhookPath: "/channels/feishu/events",
-        allowedChatIds: [],
+        allowFrom: [],
       },
       qq: {
         enabled: false,
@@ -94,9 +94,7 @@ function starterConfig(home: string): RuntimeConfigInput {
         sessionDir: "",
         typingKeepAlive: true,
         parseFaceEmoji: true,
-        allowedConversationIds: [],
-        allowedUserIds: [],
-        allowedGroupOpenids: [],
+        allowFrom: [],
       },
     },
     tools: { permissions: { default: "allow", overrides: {} } },

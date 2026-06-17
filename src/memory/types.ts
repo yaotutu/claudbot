@@ -5,7 +5,6 @@ export type MemoryMarkdownPaths = {
   longTermFile: string;
   eventsFile: string;
   stateFile: string;
-  deprecatedMemoryJsonFile: string;
   sessionsDir: string;
 };
 

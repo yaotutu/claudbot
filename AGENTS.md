@@ -8,8 +8,20 @@
 
 ## 模块 README 索引
 
+- `src/agent/README.md`: Claude SDK 封装、NormalizedEvent 归一化、持久 runtime 与 system prompt 组装。
+- `src/runtime/README.md`: 服务装配层，线性拼装 ServiceContainer，无循环依赖。
+- `src/sessions/README.md`: 会话 JSONL 转录读写、SDK 镜像与读模型。
+- `src/scheduler/README.md`: cron / 一次性 / 间隔定时任务调度与执行记录。
+- `src/tools/README.md`: 原生工具注册、权限、审计与 SDK MCP server 桥接。
+- `src/memory/README.md`: Markdown 长期记忆、事件流与 dream 提炼。
+- `src/gateway/README.md`: HTTP + WebSocket 入口、协议帧与路由。
+- `src/conversation/README.md`: 用户轮次主循环、activity 收集与 session remap。
+- `src/notifications/README.md`: 产品通知存储与派发（定时任务结果）。
+- `src/shared/README.md`: 前后端共享契约（协议类型 + activity reducer），前端跨包 import。
+- `src/mcp/README.md`: MCP server 只读状态查询。
+- `src/utils/README.md`: 无业务语义的基础工具函数。
 - `src/channels/README.md`: 外部聊天渠道协议、adapter 生命周期、运行时分发和平台实现边界。
-- `src/config/README.md`: 运行时配置 schema、加载顺序、路径派生和 channel 配置 alias 规则。
+- `src/config/README.md`: 运行时配置 schema、加载顺序、路径派生和 channel 配置约定。
 - `webui/src/claudebot-ui/README.md`: Nanobot 风格 WebUI 迁移层，只做前端视图适配，不改变 Claudebot 原生协议。
 
 ## 当前架构边界
@@ -59,11 +71,9 @@ Claudebot 的运行时目录应区分“实例配置/运行数据”和“Agent 
 
 `src/config/paths.ts` 是这些路径的唯一来源。不要重新引入旧的 `agent/user.md`、`agent/soul.md`、`agent/memory.json`、`scheduler/schedules.json`、`scheduler/runs.json` 或 `sdk-config/` 路径；本项目不为旧目录做兼容、alias 或数据迁移。Profile 文本放在 `profile/`，长期记忆放在 `memory/`，SDK JSONL 会话放在 `sessions/`，外部 channel 绑定放在 `channels/channel-bindings.json`，QQ Gateway 会话状态放在 `channels/qq/`，定时任务定义放在 `schedules/jobs.json`，每次定时任务执行记录独立写入 `schedules/runs/<run-id>.json`。
 
-## 开发实例与端口隔离
+## 开发实例
 
-开发模式必须按 worktree 隔离运行实例，避免不同分支或 worktree 共用 gateway/WebUI 端口。`bun run dev` 相关实现应优先读取当前 worktree 的 `./.claudebot-local/config.json`；如果该文件不存在，则从 `~/.claudebot/config.json` 只读复制一份作为模板（全局配置不存在时使用 schema 默认值），随机选择当前空闲的 gateway 端口和 WebUI 端口，写入 `./.claudebot-local/config.json` 及必要的 dev 元数据。后续启动必须复用本地配置里的端口，除非用户删除 `./.claudebot-local/`。
-
-开发脚本不得写入或修改 `~/.claudebot/config.json`，全局配置只作为首次创建本地配置时的模板。启动 gateway 时必须将 `CLAUDEBOT_CONFIG` 指向当前 worktree 的本地配置；启动 WebUI 时必须使用本地 dev 端口，并通过 `CLAUDEBOT_API_URL` 指向同一 worktree 的 gateway。`./.claudebot-local/` 属于本地运行状态，必须加入 `.gitignore`，不得提交。
+Claudebot 以单实例开发运行，`bun run dev` 用 `concurrently` 同时启动 gateway 与 WebUI：gateway 端口读 `config.gateway.port`（默认 18790），WebUI dev 端口固定 5173。不要引入 `.claudebot-local/` 端口隔离或多 worktree 并行机制——当前不在范围内。开发脚本不得写入或修改 `~/.claudebot/config.json`，全局配置只作为首次启动时的模板。
 
 ## 构建、测试与开发命令
 

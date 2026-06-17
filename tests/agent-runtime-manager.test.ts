@@ -3,7 +3,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAgentRuntimeManager, type AgentRuntimeQueryFactory } from "../src/agent/runtime-manager.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import type { RuntimeConfig } from "../src/config/schema.ts";
-import { ToolRegistry } from "../src/tools/registry.ts";
+import { createToolRegistry } from "../src/tools/registry.ts";
 
 function config(): RuntimeConfig {
   return resolveRuntimeConfig({ home: "/tmp/bot" }, {});
@@ -12,7 +12,7 @@ function config(): RuntimeConfig {
 function makeManager(queryFactory: AgentRuntimeQueryFactory) {
   return createAgentRuntimeManager({
     config: config(),
-    registry: new ToolRegistry({ defaultPolicy: "allow", overrides: {} }),
+    registry: createToolRegistry({ defaultPolicy: "allow", overrides: {} }),
     sdkConfigDir: "/tmp/sdk",
     sessionStore: {} as never,
     queryFactory,

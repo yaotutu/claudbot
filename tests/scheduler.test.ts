@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SchedulerStore } from "../src/scheduler/store.ts";
+import { createSchedulerStore } from "../src/scheduler/store.ts";
 import { createStoreOps } from "../src/scheduler/store-ops.ts";
 import { createSchedulerTrigger } from "../src/scheduler/trigger.ts";
 import { buildServices } from "../src/runtime/services.ts";
@@ -26,7 +26,7 @@ function makeRecordingQueryFactory(events: SdkMessage[]): QueryFactory & { calls
 describe("scheduler store-ops (CRUD)", () => {
   test("creates cron schedule with next run", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const schedule = await storeOps.create({
       name: "test",
@@ -44,7 +44,7 @@ describe("scheduler store-ops (CRUD)", () => {
 
   test("creates 'at' one-shot schedule", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const at = new Date(Date.now() + 60_000).toISOString();
     const schedule = await storeOps.create({
@@ -60,7 +60,7 @@ describe("scheduler store-ops (CRUD)", () => {
 
   test("creates 'every' recurring schedule", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const schedule = await storeOps.create({
       name: "check",
@@ -78,7 +78,7 @@ describe("scheduler store-ops (CRUD)", () => {
 
   test("invalid cron is rejected", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     await expect(
       storeOps.create({ name: "bad", cronExpr: "not a cron", timezone: "UTC", message: "x" })
@@ -87,7 +87,7 @@ describe("scheduler store-ops (CRUD)", () => {
 
   test("no schedule type provided throws", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     await expect(
       storeOps.create({ name: "empty", message: "x" })
@@ -98,7 +98,7 @@ describe("scheduler store-ops (CRUD)", () => {
 describe("scheduler trigger (execution)", () => {
   test("run now records result", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "done");
     const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
@@ -110,7 +110,7 @@ describe("scheduler trigger (execution)", () => {
   test("stores each run as a separate JSON file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
     const runsDir = join(dir, "runs");
-    const store = new SchedulerStore(join(dir, "jobs.json"), runsDir);
+    const store = createSchedulerStore(join(dir, "jobs.json"), runsDir);
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "done");
     const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
@@ -128,7 +128,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("run now skips when schedule is already running", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "ok");
     const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
@@ -149,7 +149,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("run now clears stale running marker and executes schedule", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     let calls = 0;
     const trigger = createSchedulerTrigger(store, async () => { calls++; return "recovered"; });
@@ -173,7 +173,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("tick skips re-entry while a previous tick is still running", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     let release!: () => void;
     const blocker = new Promise<void>((resolve) => { release = resolve; });
@@ -203,7 +203,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("executor failure is persisted without retry", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => { throw new Error("boom"); });
     const schedule = await storeOps.create({ name: "test", cronExpr: "* * * * *", timezone: "UTC", message: "run" });
@@ -220,7 +220,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("due tick runs due schedules and advances nextRunAt", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const calls: string[] = [];
     const trigger = createSchedulerTrigger(store, async (sched) => { calls.push(sched.id); return "ok"; });
@@ -241,7 +241,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("tick executes multiple due schedules in parallel", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const executionOrder: string[] = [];
     const trigger = createSchedulerTrigger(store, async (sched) => {
@@ -274,7 +274,7 @@ describe("scheduler trigger (execution)", () => {
 
   test("'at' schedule is deleted after execution", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "done");
 
@@ -305,7 +305,7 @@ describe("scheduler trigger (execution)", () => {
 describe("scheduler trigger (start/stop)", () => {
   test("start triggers periodic ticks", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     let tickCount = 0;
     const trigger = createSchedulerTrigger(store, async () => { tickCount++; return "ok"; });
@@ -323,7 +323,7 @@ describe("scheduler trigger (start/stop)", () => {
 
   test("stop prevents further ticks", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     let tickCount = 0;
     const trigger = createSchedulerTrigger(store, async () => { tickCount++; return "ok"; });
     trigger.start(100);
@@ -336,7 +336,7 @@ describe("scheduler trigger (start/stop)", () => {
 
   test("tick error does not break the loop", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-scheduler-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     let callCount = 0;
     const trigger = createSchedulerTrigger(store, async () => {

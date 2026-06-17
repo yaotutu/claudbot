@@ -9,21 +9,21 @@ import { loadConfig, type LoadedConfig } from "../config/loader.ts";
 import { runtimePaths, type RuntimePaths } from "../config/paths.ts";
 import { createSdkJsonlSessionStore } from "../sessions/sdk-jsonl-store.ts";
 import { createSessionService, type ClaudebotSessionService } from "../sessions/session-service.ts";
-import { RuntimeStateStore } from "./state.ts";
-import { AgentProfileStore } from "../agent/profile.ts";
+import { createRuntimeStateStore, type RuntimeStateStore } from "./state.ts";
+import { createAgentProfileStore, type AgentProfileStore } from "../agent/profile.ts";
 import { initMemoryMarkdownStore } from "../memory/markdown-store.ts";
 import type { MemoryMarkdownPaths } from "../memory/types.ts";
-import { SchedulerStore } from "../scheduler/store.ts";
+import { createSchedulerStore, type SchedulerStore } from "../scheduler/store.ts";
 import { createStoreOps, type SchedulerStoreOps } from "../scheduler/store-ops.ts";
 import { createSchedulerTrigger, type SchedulerTrigger } from "../scheduler/trigger.ts";
 import { createNoopNotifier, type ScheduleNotifier } from "../scheduler/notify.ts";
 import { createNotificationStore, type NotificationStore } from "../notifications/store.ts";
 import { createChannelSessionBindingStore, type ChannelSessionBindingStore } from "../channels/session-bindings-store.ts";
-import { ToolRegistry } from "../tools/registry.ts";
+import { createToolRegistry, type ToolRegistry } from "../tools/registry.ts";
 import { registerSchedulerTools } from "../tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../tools/builtin/agent-files.ts";
-import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../agent/runner.ts";
+import { createClaudeRunner, runOnceTurn, makeRealQueryFactory, type ClaudeRunner, type QueryFactory } from "../agent/runner.ts";
 import { createAgentRuntimeManager, type AgentRuntimeQueryFactory } from "../agent/runtime-manager.ts";
 import type { SDKUserMessage, SessionStore as SDKSessionStore } from "@anthropic-ai/claude-agent-sdk";
 
@@ -65,8 +65,9 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
         : await loadConfig());
   const config = loaded.config;
   const paths = deps.paths ?? runtimePaths(config);
-  const runtimeState = new RuntimeStateStore(paths.runtimeStateFile);
-  const profile = new AgentProfileStore({
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const runtimeState = createRuntimeStateStore(paths.runtimeStateFile);
+  const profile = createAgentProfileStore({
     userFile: paths.userFile,
     soulFile: paths.soulFile,
   });
@@ -78,11 +79,10 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     longTermFile: paths.longTermMemoryFile,
     eventsFile: paths.memoryEventsFile,
     stateFile: paths.memoryStateFile,
-    deprecatedMemoryJsonFile: paths.deprecatedMemoryJsonFile,
     sessionsDir: paths.sessionsDir,
   };
   await initMemoryMarkdownStore(memoryPaths);
-  const schedulerStore = new SchedulerStore(paths.schedulesFile, paths.scheduleRunsDir);
+  const schedulerStore = createSchedulerStore(paths.schedulesFile, paths.scheduleRunsDir);
   const notificationStore = createNotificationStore(paths.notificationsFile);
   const channelBindings = createChannelSessionBindingStore(paths.channelBindingsFile);
   const sessions = createSessionService({ sessionsDir: paths.sessionsDir, runtimeState });
@@ -127,7 +127,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
     promptInputs: {
       home: paths.home,
       workspacePath: paths.workspace,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timezone,
       userFile: paths.userFile,
       soulFile: paths.soulFile,
     },
@@ -139,14 +139,14 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
   });
 
   const makeRunner = (source: "user_turn" | "schedule_turn", sessionId?: string, scheduleRunId?: string): ClaudeRunner => {
-    return new ClaudeRunner(
+    return createClaudeRunner(
       {
         config,
         registry: toolRegistry,
         promptInputs: {
           home: paths.home,
           workspacePath: paths.workspace,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timezone,
           source,
           sessionId,
           scheduleRunId,
@@ -180,6 +180,7 @@ export async function buildServices(deps: ServiceDeps = {}): Promise<ServiceCont
 }
 
 function adaptQueryFactoryForRuntime(queryFactory: QueryFactory, paths: RuntimePaths): AgentRuntimeQueryFactory {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return async ({ input, options }) => {
     let closed = false;
     return {
@@ -195,7 +196,7 @@ function adaptQueryFactoryForRuntime(queryFactory: QueryFactory, paths: RuntimeP
               source: "user_turn",
               home: paths.home,
               workspacePath: paths.workspace,
-              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              timezone,
               sessionId: typeof options.resume === "string" ? options.resume : undefined,
               services: null,
             },
@@ -232,7 +233,7 @@ function buildToolRegistry(
     defaultPolicy: config.tools.permissions.default,
     overrides: config.tools.permissions.overrides,
   };
-  const registry = new ToolRegistry(permissions, auditPath);
+  const registry = createToolRegistry(permissions, auditPath);
   registerSchedulerTools(registry, services);
   registerMemoryTools(registry, services);
   registerAgentFileTools(registry, services);
@@ -253,8 +254,11 @@ async function runScheduledTurn(
   // to the user via notifier.deliver. The execution session is cleaned up
   // after completion so it never appears in the sidebar.
   const prompt = `[定时任务 ${sched.name}] ${sched.message}`;
-  const runner = new ClaudeRunner(
-    {
+  let result = "";
+  let failedMessage = "";
+  let execSessionId: string | undefined;
+  for await (const ev of runOnceTurn({
+    deps: {
       config,
       registry: toolRegistry,
       promptInputs: {
@@ -270,11 +274,8 @@ async function runScheduledTurn(
       },
     },
     queryFactory,
-  );
-  let result = "";
-  let failedMessage = "";
-  let execSessionId: string | undefined;
-  for await (const ev of runner.run({ prompt })) {
+    prompt,
+  })) {
     if (ev.sessionId) execSessionId = ev.sessionId;
     if (ev.type === "text_delta") result += ev.text;
     if (ev.type === "turn_done") {

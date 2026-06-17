@@ -28,59 +28,60 @@ export type QueryFactory = (args: {
   toolContext: ToolContext;
 }) => AsyncIterable<unknown>;
 
-export class ClaudeRunner {
-  constructor(
-    private readonly deps: ClaudeRunnerDeps,
-    private readonly queryFactory: QueryFactory,
-  ) {}
+export type ClaudeRunner = {
+  run(opts: RunOptions): AsyncGenerator<NormalizedEvent>;
+};
 
-  async *run(opts: RunOptions): AsyncGenerator<NormalizedEvent> {
-    const toolContext: ToolContext = {
-      source: this.deps.promptInputs.source,
-      home: this.deps.promptInputs.home,
-      workspacePath: this.deps.promptInputs.workspacePath,
-      timezone: this.deps.promptInputs.timezone,
-      sessionId: this.deps.promptInputs.sessionId,
-      scheduleRunId: this.deps.promptInputs.scheduleRunId,
-      services: null,
-    };
-    const systemPrompt = await buildSystemPrompt({
-      ...this.deps.promptInputs,
-      toolPrompts: this.deps.registry.getPromptSections(),
-    });
-    const stream = this.queryFactory({
-      prompt: opts.prompt,
-      resumeSessionId: opts.resumeSessionId,
-      systemPrompt,
-      toolContext,
-    });
-    let lastSessionId: string | undefined;
-    try {
-      for await (const raw of stream) {
-        const msg = raw as SdkMessage;
-        if (msg.session_id) lastSessionId = msg.session_id;
-        for (const ev of normalizeSdkMessage(msg, lastSessionId)) {
-          yield ev;
+export function createClaudeRunner(deps: ClaudeRunnerDeps, queryFactory: QueryFactory): ClaudeRunner {
+  return {
+    async *run(opts: RunOptions): AsyncGenerator<NormalizedEvent> {
+      const toolContext: ToolContext = {
+        source: deps.promptInputs.source,
+        home: deps.promptInputs.home,
+        workspacePath: deps.promptInputs.workspacePath,
+        timezone: deps.promptInputs.timezone,
+        sessionId: deps.promptInputs.sessionId,
+        scheduleRunId: deps.promptInputs.scheduleRunId,
+        services: null,
+      };
+      const systemPrompt = await buildSystemPrompt({
+        ...deps.promptInputs,
+        toolPrompts: deps.registry.getPromptSections(),
+      });
+      const stream = queryFactory({
+        prompt: opts.prompt,
+        resumeSessionId: opts.resumeSessionId,
+        systemPrompt,
+        toolContext,
+      });
+      let lastSessionId: string | undefined;
+      try {
+        for await (const raw of stream) {
+          const msg = raw as SdkMessage;
+          if (msg.session_id) lastSessionId = msg.session_id;
+          for (const ev of normalizeSdkMessage(msg, lastSessionId)) {
+            yield ev;
+          }
         }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        yield { type: "error", message, sessionId: lastSessionId };
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      yield { type: "error", message, sessionId: lastSessionId };
-    }
-  }
+    },
+  };
+}
 
-  // Expose for the gateway to build a real SDK-backed query factory.
-  buildToolContext(): ToolContext {
-    return {
-      source: this.deps.promptInputs.source,
-      home: this.deps.promptInputs.home,
-      workspacePath: this.deps.promptInputs.workspacePath,
-      timezone: this.deps.promptInputs.timezone,
-      sessionId: this.deps.promptInputs.sessionId,
-      scheduleRunId: this.deps.promptInputs.scheduleRunId,
-      services: null,
-    };
-  }
+/** One-shot runner: build a ClaudeRunner and immediately drive a single turn. */
+export function runOnceTurn(args: {
+  deps: ClaudeRunnerDeps;
+  queryFactory: QueryFactory;
+  prompt: string;
+  resumeSessionId?: string;
+}): AsyncGenerator<NormalizedEvent> {
+  return createClaudeRunner(args.deps, args.queryFactory).run({
+    prompt: args.prompt,
+    resumeSessionId: args.resumeSessionId,
+  });
 }
 
 export function makeRealQueryFactory(
