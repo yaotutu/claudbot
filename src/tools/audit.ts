@@ -12,15 +12,19 @@ export type ToolAuditRecord = {
   scheduleRunId?: string;
 };
 
-export class ToolAuditLog {
-  constructor(private readonly path: string) {}
+export type ToolAuditLog = {
+  append(record: ToolAuditRecord): Promise<void>;
+};
 
-  async append(record: ToolAuditRecord): Promise<void> {
-    await ensureDir(dirname(this.path));
-    const line = `${JSON.stringify(record)}\n`;
-    // Read-modify-write. Single-process MVP: no concurrent appenders.
-    const file = Bun.file(this.path);
-    const existing = (await file.exists()) ? await file.text() : "";
-    await Bun.write(this.path, existing + line);
-  }
+export function createToolAuditLog(path: string): ToolAuditLog {
+  return {
+    async append(record) {
+      await ensureDir(dirname(path));
+      const line = `${JSON.stringify(record)}\n`;
+      // Read-modify-write. Single-process MVP: no concurrent appenders.
+      const file = Bun.file(path);
+      const existing = (await file.exists()) ? await file.text() : "";
+      await Bun.write(path, existing + line);
+    },
+  };
 }

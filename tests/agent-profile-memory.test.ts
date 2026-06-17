@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { AgentProfileStore } from "../src/agent/profile.ts";
+import { createAgentProfileStore } from "../src/agent/profile.ts";
 import { appendMemoryEvent, initMemoryMarkdownStore, searchMemoryText } from "../src/memory/markdown-store.ts";
 import { applyDreamPatchPlan, runMemoryDream } from "../src/memory/dream.ts";
 import { commitMemoryChanges, initMemoryGitStore, listMemoryCommits, showMemoryCommitDiff } from "../src/memory/git-store.ts";
@@ -17,7 +17,6 @@ function makeMemoryPaths(dir: string) {
     longTermFile: join(dir, "memory", "MEMORY.md"),
     eventsFile: join(dir, "memory", "memory_events.jsonl"),
     stateFile: join(dir, "memory", "memory_state.json"),
-    deprecatedMemoryJsonFile: join(dir, "memory", "memory.json"),
     sessionsDir: join(dir, "sessions"),
   };
 }
@@ -34,7 +33,7 @@ describe("agent profile and memory", () => {
 
   test("initializes user and soul files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-agent-"));
-    const store = new AgentProfileStore({
+    const store = createAgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
     });
@@ -45,7 +44,7 @@ describe("agent profile and memory", () => {
 
   test("rejects stale file version", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-agent-"));
-    const store = new AgentProfileStore({
+    const store = createAgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
     });
@@ -64,28 +63,6 @@ describe("agent profile and memory", () => {
     expect(await Bun.file(paths.longTermFile).exists()).toBe(true);
     expect(await Bun.file(paths.eventsFile).exists()).toBe(true);
     expect(await readFile(paths.longTermFile, "utf8")).toContain("# Memory");
-  });
-
-  test("deletes deprecated memory.json without importing old data", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "claudebot-memory-deprecated-"));
-    const paths = makeMemoryPaths(dir);
-    await Bun.write(paths.deprecatedMemoryJsonFile, JSON.stringify({
-      entries: [{
-        id: "mem_1",
-        content: "User prefers Chinese.",
-        tags: ["preference"],
-        source: "test",
-        confidence: 1,
-        createdAt: "2026-06-01T00:00:00.000Z",
-        updatedAt: "2026-06-01T00:00:00.000Z",
-      }],
-    }));
-
-    await initMemoryMarkdownStore(paths);
-
-    expect(await Bun.file(paths.deprecatedMemoryJsonFile).exists()).toBe(false);
-    expect(await readFile(paths.longTermFile, "utf8")).not.toContain("User prefers Chinese.");
-    expect(await readFile(paths.eventsFile, "utf8")).toContain("deprecated_memory_json_deleted");
   });
 
   test("searches long-term memory and memory event records", async () => {

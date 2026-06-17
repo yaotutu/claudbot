@@ -18,21 +18,26 @@ const emptyState: RuntimeState = {
   lastActiveReason: "",
 };
 
-export class RuntimeStateStore {
-  constructor(private readonly path: string) {}
+export type RuntimeStateStore = {
+  get(): Promise<RuntimeState>;
+  setLastActiveSession(sessionId: string, reason: LastActiveReason): Promise<void>;
+};
 
-  async get(): Promise<RuntimeState> {
-    const state = await readJson<Partial<RuntimeState>>(this.path, emptyState);
+export function createRuntimeStateStore(path: string): RuntimeStateStore {
+  const get = async (): Promise<RuntimeState> => {
+    const state = await readJson<Partial<RuntimeState>>(path, emptyState);
     return { ...emptyState, ...state };
-  }
-
-  async setLastActiveSession(sessionId: string, reason: LastActiveReason): Promise<void> {
-    const current = await this.get();
-    await writeJsonAtomic(this.path, {
-      ...current,
-      lastActiveSessionId: sessionId,
-      lastActiveAt: new Date().toISOString(),
-      lastActiveReason: reason,
-    });
-  }
+  };
+  return {
+    get,
+    async setLastActiveSession(sessionId, reason) {
+      const current = await get();
+      await writeJsonAtomic(path, {
+        ...current,
+        lastActiveSessionId: sessionId,
+        lastActiveAt: new Date().toISOString(),
+        lastActiveReason: reason,
+      });
+    },
+  };
 }

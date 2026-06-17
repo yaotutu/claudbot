@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
-import { ToolRegistry } from "../src/tools/registry.ts";
+import { createToolRegistry } from "../src/tools/registry.ts";
 import { createClaudebotSdkMcpServer } from "../src/tools/sdk-mcp-server.ts";
 import type { ToolContext } from "../src/tools/types.ts";
 
@@ -21,7 +21,7 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 
 describe("tool registry", () => {
   test("validates and executes a tool", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registry.register({
       name: "echo",
       description: "echo",
@@ -33,7 +33,7 @@ describe("tool registry", () => {
   });
 
   test("collects tool prompt sections in priority order", () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registry.register({
       name: "no_prompt",
       description: "no prompt",
@@ -62,7 +62,7 @@ describe("tool registry", () => {
   });
 
   test("denies a denied tool", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "deny", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "deny", overrides: {} });
     registry.register({
       name: "echo",
       description: "echo",
@@ -73,7 +73,7 @@ describe("tool registry", () => {
   });
 
   test("confirm policy is denied in MVP", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "confirm", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "confirm", overrides: {} });
     registry.register({
       name: "echo",
       description: "echo",
@@ -84,12 +84,12 @@ describe("tool registry", () => {
   });
 
   test("unknown tool returns a structured error", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     await expect(registry.execute("nope", {}, makeCtx())).rejects.toThrow("unknown tool");
   });
 
   test("invalid input reports validation failure", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registry.register({
       name: "echo",
       description: "echo",
@@ -102,7 +102,7 @@ describe("tool registry", () => {
   test("audit log records success and failure", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-audit-"));
     const auditPath = join(dir, "tools.jsonl");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} }, auditPath);
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} }, auditPath);
     registry.register({
       name: "good",
       description: "ok",
@@ -128,7 +128,7 @@ describe("tool registry", () => {
   });
 
   test("SDK MCP server exposes native tools in-process", () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registry.register({
       name: "echo",
       description: "echo",
@@ -141,7 +141,7 @@ describe("tool registry", () => {
   });
 
   test("SDK MCP server reads the latest ToolContextRef for each call", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     const seen: string[] = [];
     registry.register({
       name: "ctx_echo",

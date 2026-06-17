@@ -4,10 +4,10 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
-import { ClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../src/agent/runner.ts";
+import { createClaudeRunner, makeRealQueryFactory, type QueryFactory } from "../src/agent/runner.ts";
 import { buildSystemPrompt } from "../src/agent/prompt.ts";
-import { AgentProfileStore } from "../src/agent/profile.ts";
-import { ToolRegistry } from "../src/tools/registry.ts";
+import { createAgentProfileStore } from "../src/agent/profile.ts";
+import { createToolRegistry, type ToolRegistry } from "../src/tools/registry.ts";
 import { resolveRuntimeConfig } from "../src/config/loader.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { registerSchedulerTools } from "../src/tools/builtin/scheduler.ts";
@@ -98,7 +98,7 @@ async function collectEvents(gen: AsyncGenerator<NormalizedEvent>): Promise<Norm
 describe("prompt builder", () => {
   test("embeds time, timezone, home, workspace, source, user/soul", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-prompt-"));
-    const profile = new AgentProfileStore({
+    const profile = createAgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
     });
@@ -176,12 +176,12 @@ describe("prompt builder", () => {
 
   test("agent file tool prompt warns that updates replace the entire file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-prompt-agent-files-"));
-    const profile = new AgentProfileStore({
+    const profile = createAgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
     });
     await profile.init();
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerAgentFileTools(registry, { profile });
 
     const prompt = await buildSystemPrompt({
@@ -216,8 +216,8 @@ describe("claude runner normalization", () => {
   };
 
   test("text assistant -> text_delta", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("05-text-assistant.json")]));
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("05-text-assistant.json")]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
     const text = events.find((e) => e.type === "text_delta");
     expect(text).toBeDefined();
@@ -234,7 +234,7 @@ describe("claude runner normalization", () => {
       delete: async () => undefined,
       setEnabled: async () => schedule,
     };
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, {
       storeOps,
       getTrigger: () => ({
@@ -245,7 +245,7 @@ describe("claude runner normalization", () => {
         stop: () => undefined,
       }),
     });
-    const runner = new ClaudeRunner(baseDeps(registry), async function* ({ systemPrompt }) {
+    const runner = createClaudeRunner(baseDeps(registry), async function* ({ systemPrompt }) {
       capturedSystemPrompt = systemPrompt;
     });
 
@@ -259,15 +259,15 @@ describe("claude runner normalization", () => {
   });
 
   test("thinking assistant -> thinking_delta", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("02-thinking-assistant.json")]));
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("02-thinking-assistant.json")]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
     expect(events.some((e) => e.type === "thinking_delta")).toBe(true);
   });
 
   test("tool_use -> tool_start", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("03-tool-use-assistant.json")]));
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("03-tool-use-assistant.json")]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
     const toolStart = events.find((e) => e.type === "tool_start");
     expect(toolStart).toBeDefined();
@@ -277,8 +277,8 @@ describe("claude runner normalization", () => {
   });
 
   test("tool_result user -> tool_result event with isError=false", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("04-tool-result-user.json")]));
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("04-tool-result-user.json")]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
     const tr = events.find((e) => e.type === "tool_result");
     expect(tr).toBeDefined();
@@ -286,8 +286,8 @@ describe("claude runner normalization", () => {
   });
 
   test("result success -> turn_done with session_id", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("07-result-success.json")]));
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([loadFixture("07-result-success.json")]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
     const done = events.find((e) => e.type === "turn_done");
     expect(done).toBeDefined();
@@ -299,8 +299,8 @@ describe("claude runner normalization", () => {
   });
 
   test("error type -> error event", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([
       { type: "error", error: "boom", session_id: "sess_err" },
     ]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
@@ -313,10 +313,10 @@ describe("claude runner normalization", () => {
   });
 
   test("captured session_id from init is propagated to subsequent events", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     const init = loadFixture("01-init.json");
     const text = loadFixture("05-text-assistant.json");
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([init, text]));
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([init, text]));
     const events = await collectEvents(runner.run({ prompt: "hi" }));
     const textEv = events.find((e) => e.type === "text_delta");
     expect(textEv).toBeDefined();
@@ -326,8 +326,8 @@ describe("claude runner normalization", () => {
   });
 
   test("system init forwards MCP server status", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([
       {
         type: "system",
         subtype: "init",
@@ -345,8 +345,8 @@ describe("claude runner normalization", () => {
   });
 
   test("system api_error forwards retry status", async () => {
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
-    const runner = new ClaudeRunner(baseDeps(registry), makeQueryFactory([
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const runner = createClaudeRunner(baseDeps(registry), makeQueryFactory([
       {
         type: "system",
         subtype: "api_error",
@@ -384,7 +384,7 @@ describe("makeRealQueryFactory", () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-rq-"));
     const sdkDir = mkdtempSync(join(tmpdir(), "claudebot-sdk-"));
     const sessionsDir = mkdtempSync(join(tmpdir(), "claudebot-sess-"));
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     const sessionStore = createSdkJsonlSessionStore({ sessionsDir });
     const factory = makeRealQueryFactory(registry, config, sdkDir, sessionStore);
     // Consume the generator enough to trigger the SDK call (which happens on
@@ -440,25 +440,36 @@ describe("makeRealQueryFactory", () => {
   });
 
   test("maps the selected Claude Code alias to a single provider model env var", async () => {
-    const config = resolveRuntimeConfig(
-      {
-        home: "/tmp/x",
-        claudeCode: {
-          baseUrl: "https://open.bigmodel.cn/api/anthropic",
-          apiKey: "sk-test-key",
-          model: "opus",
-          providerModel: "glm-5.1",
+    // Pin ANTHROPIC_DEFAULT_* so leaked process.env vars don't reach the assertion.
+    const keys = ["ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"] as const;
+    const orig = Object.fromEntries(keys.map((k) => [k, process.env[k]])) as Record<string, string | undefined>;
+    for (const k of keys) delete process.env[k];
+    try {
+      const config = resolveRuntimeConfig(
+        {
+          home: "/tmp/x",
+          claudeCode: {
+            baseUrl: "https://open.bigmodel.cn/api/anthropic",
+            apiKey: "sk-test-key",
+            model: "opus",
+            providerModel: "glm-5.1",
+          },
         },
-      },
-      {},
-    );
-    const opts = await invokeFactoryAndCapture(config);
-    const env = opts.env as Record<string, string | undefined>;
+        {},
+      );
+      const opts = await invokeFactoryAndCapture(config);
+      const env = opts.env as Record<string, string | undefined>;
 
-    expect(opts.model).toBe("opus");
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("glm-5.1");
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+      expect(opts.model).toBe("opus");
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("glm-5.1");
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+    } finally {
+      for (const k of keys) {
+        if (orig[k] === undefined) delete process.env[k];
+        else process.env[k] = orig[k]!;
+      }
+    }
   });
 
   test("falls back to process.env when config has no baseUrl/apiKey", async () => {

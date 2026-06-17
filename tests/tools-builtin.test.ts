@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ToolRegistry } from "../src/tools/registry.ts";
+import { createToolRegistry } from "../src/tools/registry.ts";
 import { registerSchedulerTools } from "../src/tools/builtin/scheduler.ts";
 import { registerMemoryTools } from "../src/tools/builtin/memory.ts";
 import { registerAgentFileTools } from "../src/tools/builtin/agent-files.ts";
-import { SchedulerStore } from "../src/scheduler/store.ts";
+import { createSchedulerStore } from "../src/scheduler/store.ts";
 import { createStoreOps } from "../src/scheduler/store-ops.ts";
 import { createSchedulerTrigger } from "../src/scheduler/trigger.ts";
-import { AgentProfileStore } from "../src/agent/profile.ts";
+import { createAgentProfileStore } from "../src/agent/profile.ts";
 import { initMemoryMarkdownStore } from "../src/memory/markdown-store.ts";
 import { commitMemoryChanges, initMemoryGitStore } from "../src/memory/git-store.ts";
 import type { ToolContext } from "../src/tools/types.ts";
@@ -22,7 +22,6 @@ function makeMemoryPaths(dir: string) {
     longTermFile: join(dir, "memory", "MEMORY.md"),
     eventsFile: join(dir, "memory", "memory_events.jsonl"),
     stateFile: join(dir, "memory", "memory_state.json"),
-    deprecatedMemoryJsonFile: join(dir, "memory", "memory.json"),
     sessionsDir: join(dir, "sessions"),
   };
 }
@@ -41,10 +40,10 @@ function makeCtx(services: unknown, overrides: Partial<ToolContext> = {}): ToolC
 describe("built-in cron tool", () => {
   test("cron add (kind=cron) validates and creates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
     const ctx = makeCtx({});
     const result = await registry.execute("cron", {
@@ -56,10 +55,10 @@ describe("built-in cron tool", () => {
 
   test("cron add (kind=at) creates one-shot", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
     const ctx = makeCtx({});
     const at = new Date(Date.now() + 60_000).toISOString();
@@ -72,10 +71,10 @@ describe("built-in cron tool", () => {
 
   test("cron add rejects bad cron", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
     const ctx = makeCtx({});
     await expect(registry.execute("cron", {
@@ -85,10 +84,10 @@ describe("built-in cron tool", () => {
 
   test("cron run delegates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "hello");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
     const ctx = makeCtx({});
     const created = await storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "m" });
@@ -99,10 +98,10 @@ describe("built-in cron tool", () => {
 
   test("cron list returns all schedules", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
     const ctx = makeCtx({});
     await storeOps.create({ name: "a", cronExpr: "* * * * *", timezone: "UTC", message: "1" });
@@ -113,10 +112,10 @@ describe("built-in cron tool", () => {
 
   test("cron remove deletes a schedule", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-bis-"));
-    const store = new SchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
+    const store = createSchedulerStore(join(dir, "jobs.json"), join(dir, "runs"));
     const storeOps = createStoreOps(store);
     const trigger = createSchedulerTrigger(store, async () => "x");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerSchedulerTools(registry, { storeOps, getTrigger: () => trigger });
     const ctx = makeCtx({});
     const created = await storeOps.create({ name: "t", cronExpr: "* * * * *", timezone: "UTC", message: "m" });
@@ -135,7 +134,7 @@ describe("built-in memory tools", () => {
     await Bun.write(memoryPaths.soulFile, "# Soul\n");
     await initMemoryMarkdownStore(memoryPaths);
     await Bun.write(memoryPaths.longTermFile, "# Memory\n\nProject uses Bun runtime.\n");
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerMemoryTools(registry, { memoryPaths });
     const ctx = makeCtx({ memoryPaths }, { sessionId: "sess_1" });
 
@@ -158,7 +157,7 @@ describe("built-in memory tools", () => {
     await Bun.write(memoryPaths.longTermFile, "# Memory\n\nTool visible fact.\n");
     const commit = await commitMemoryChanges(memoryPaths, "memory: add tool fact");
 
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerMemoryTools(registry, { memoryPaths });
     const ctx = makeCtx({ memoryPaths });
     const log = await registry.execute("memory_log", { limit: 5 }, ctx) as { sha: string }[];
@@ -171,12 +170,12 @@ describe("built-in memory tools", () => {
 describe("built-in agent file tools", () => {
   test("agent_file_read and agent_file_update delegate with version", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-biaf-"));
-    const profile = new AgentProfileStore({
+    const profile = createAgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
     });
     await profile.init();
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerAgentFileTools(registry, { profile });
     const ctx = makeCtx({ profile });
     const read = await registry.execute("agent_file_read", { name: "user.md" }, ctx) as { content: string; version: string };
@@ -189,12 +188,12 @@ describe("built-in agent file tools", () => {
 
   test("agent_file_update rejects names outside the allow-list", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claudebot-biaf-"));
-    const profile = new AgentProfileStore({
+    const profile = createAgentProfileStore({
       userFile: join(dir, "user.md"),
       soulFile: join(dir, "soul.md"),
     });
     await profile.init();
-    const registry = new ToolRegistry({ defaultPolicy: "allow", overrides: {} });
+    const registry = createToolRegistry({ defaultPolicy: "allow", overrides: {} });
     registerAgentFileTools(registry, { profile });
     const ctx = makeCtx({ profile });
     await expect(registry.execute("agent_file_read", { name: "secret.md" }, ctx)).rejects.toThrow();
